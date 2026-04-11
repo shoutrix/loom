@@ -1,0 +1,1 @@
+"""NotebookLM-style chat engine."""

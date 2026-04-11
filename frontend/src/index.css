@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db #f3f4f6;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #f3f4f6; }
+  ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+}
+
+.prose h1, .prose h2, .prose h3 {
+  color: #1f2937;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.prose p { margin-bottom: 0.75em; line-height: 1.7; }
+.prose code {
+  background: #f0f1f3;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  color: #1f2937;
+}
+.prose pre {
+  background: #f8f9fa;
+  padding: 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  border: 1px solid #e1e4e8;
+}
+.prose table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.prose th, .prose td {
+  border: 1px solid #e1e4e8;
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.prose th { background: #f0f1f3; font-weight: 600; color: #1f2937; }
+.prose ul, .prose ol { padding-left: 1.5em; margin-bottom: 0.75em; }
+.prose li { margin-bottom: 0.25em; }
+.prose blockquote {
+  border-left: 3px solid #2563eb;
+  padding-left: 1em;
+  color: #6b7280;
+  margin: 1em 0;
+}
+.prose strong { color: #1f2937; }
+.prose a { color: #2563eb; text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
