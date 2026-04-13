@@ -23,40 +23,7 @@ ENTITY_STOPLIST = {
     "section", "table", "figure", "equation", "appendix",
 }
 
-EXTRACTION_PROMPT = """Extract entities and relationships from these research propositions.
-
-Entity types: concept, technique, paper, claim, metric, system, method, dataset
-Relationship types: supports, contradicts, builds_on, compares, component_of, improves, requires, evaluates, related_to
-
-Rules:
-- Extract SPECIFIC, CONCRETE entities (paper names, technique names, specific claims with numbers)
-- NOT vague terms like "the model", "this approach", "our method"
-- Each entity must have a meaningful description
-- Each relationship must connect two extracted entities
-
---- EXAMPLE ---
-Propositions:
-- "Matcha-TTS uses optimal transport conditional flow matching for speech synthesis."
-- "Matcha-TTS achieves a real-time factor (RTF) below 0.1."
-
-Output:
-```json
-{{
-  "entities": [
-    {{"name": "Matcha-TTS", "type": "system", "description": "Flow-matching TTS system achieving RTF < 0.1"}},
-    {{"name": "optimal transport conditional flow matching", "type": "technique", "description": "Generative modeling via optimal transport paths"}}
-  ],
-  "relationships": [
-    {{"source": "Matcha-TTS", "target": "optimal transport conditional flow matching", "type": "component_of", "description": "Uses OT-CFM as generative backbone"}}
-  ]
-}}
-```
-
---- YOUR TURN ---
-Propositions:
-{propositions}
-
-Return ONLY the JSON:"""
+from loom.prompts import ENTITY_EXTRACTION
 
 
 def _extract_batch_entities(
@@ -64,7 +31,7 @@ def _extract_batch_entities(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract entities/rels from one batch of propositions."""
     prop_text = "\n".join(f"- \"{p.text}\"" for p in batch)
-    prompt = EXTRACTION_PROMPT.format(propositions=prop_text[:5000])
+    prompt = ENTITY_EXTRACTION.format(propositions=prop_text[:5000])
     try:
         resp = llm.generate(prompt, model="flash", temperature=0.1, max_output_tokens=4096)
         parsed = _parse_json(resp.text)

@@ -8,6 +8,8 @@ that are structurally or semantically connected to the seed set.
 
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -15,6 +17,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from loom.tools.paper_search.sources import SemanticScholarClient
     from loom.tools.paper_search.types import Paper
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,7 +40,7 @@ def _fetch_paper_neighbors(
     neighbors: list[tuple[str, str, bool]] = []
     try:
         if direction in ("references", "both"):
-            refs = s2_client.fetch_references(paper_id, limit=100, rich=True)
+            refs = s2_client.fetch_references(paper_id, limit=80, rich=True)
             for ref in (refs if isinstance(refs, list) else []):
                 if not isinstance(ref, dict):
                     continue
@@ -46,7 +50,7 @@ def _fetch_paper_neighbors(
                     neighbors.append((rid, "reference", influential))
 
         if direction in ("citations", "both"):
-            cites = s2_client.fetch_citations(paper_id, limit=100)
+            cites = s2_client.fetch_citations(paper_id, limit=80)
             for cite in (cites if isinstance(cites, list) else []):
                 if not isinstance(cite, dict):
                     continue
@@ -54,8 +58,8 @@ def _fetch_paper_neighbors(
                 influential = bool(cite.get("isInfluential", False))
                 if cid and (not only_influential or influential):
                     neighbors.append((cid, "citation", influential))
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("[GraphTraversal] Error fetching neighbors for %s: %s", paper_id[:20], e)
     return neighbors
 
 
@@ -88,6 +92,10 @@ def _prune_and_add_layer(
         if count >= max_papers_per_hop:
             break
 
+    influential_kept = sum(1 for nid in next_layer if visited[nid].is_influential_edge)
+    log.info("[GraphTraversal] Depth %d: %d candidates → %d kept (%d influential, %d skipped as visited)",
+             depth, len(all_neighbors), len(next_layer), influential_kept,
+             len(all_neighbors) - len(next_layer) - (len(all_neighbors) - count))
     return next_layer
 
 
@@ -99,22 +107,13 @@ def graph_hop(
     max_papers_per_hop: int = 20,
     direction: str = "both",
     only_influential: bool = False,
-    max_workers: int = 4,
+    max_workers: int = 3,
 ) -> dict[str, GraphNode]:
-    """BFS multi-hop traversal over the S2 citation graph.
+    """BFS multi-hop traversal over the S2 citation graph."""
+    log.info("[GraphTraversal] Starting BFS: %d seeds, max_depth=%d, max_per_hop=%d, direction=%s, influential_only=%s",
+             len(seed_paper_ids), max_depth, max_papers_per_hop, direction, only_influential)
+    t0 = time.time()
 
-    Args:
-        seed_paper_ids: Starting paper IDs (S2 format).
-        s2_client: Semantic Scholar client.
-        max_depth: Maximum BFS depth (1 = direct neighbors, 2 = neighbors-of-neighbors).
-        max_papers_per_hop: Max papers to keep per BFS layer after pruning.
-        direction: Which edges to follow ("citations", "references", "both").
-        only_influential: Only follow isInfluential=True edges.
-        max_workers: Thread pool size for parallel fetching.
-
-    Returns:
-        Dict mapping paper_id -> GraphNode for all discovered papers.
-    """
     visited: dict[str, GraphNode] = {}
     for sid in seed_paper_ids:
         visited[sid] = GraphNode(paper_id=sid, depth=0, direction="seed")
@@ -123,8 +122,11 @@ def graph_hop(
 
     for depth in range(1, max_depth + 1):
         if not current_layer:
+            log.info("[GraphTraversal] No papers in layer, stopping at depth %d", depth - 1)
             break
 
+        log.info("[GraphTraversal] Depth %d: fetching neighbors for %d papers", depth, len(current_layer))
+        dt0 = time.time()
         all_neighbors: list[tuple[str, str, bool]] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -139,13 +141,19 @@ def graph_hop(
                 try:
                     for neighbor_id, dir_type, influential in fut.result():
                         all_neighbors.append((neighbor_id, parent_id, influential))
-                except Exception:
-                    continue
+                except Exception as e:
+                    log.warning("[GraphTraversal] Failed to get neighbors for %s: %s", parent_id[:20], e)
+
+        log.info("[GraphTraversal] Depth %d: found %d raw neighbors in %.2fs",
+                 depth, len(all_neighbors), time.time() - dt0)
 
         current_layer = _prune_and_add_layer(
             all_neighbors, visited, depth, max_papers_per_hop, direction,
         )
 
+    non_seed = sum(1 for n in visited.values() if n.direction != "seed")
+    log.info("[GraphTraversal] BFS complete in %.2fs: %d total nodes (%d seeds + %d discovered)",
+             time.time() - t0, len(visited), len(seed_paper_ids), non_seed)
     return visited
 
 
@@ -159,16 +167,13 @@ def hybrid_expand(
     only_influential: bool = True,
     negative_ids: list[str] | None = None,
     max_total: int = 50,
-    max_workers: int = 4,
+    max_workers: int = 3,
 ) -> list[str]:
-    """Combine structural graph hops with semantic embedding recommendations.
+    """Combine structural graph hops with semantic embedding recommendations."""
+    log.info("[HybridExpand] Starting: %d seeds, graph_depth=%d, semantic_top_k=%d",
+             len(seed_ids), graph_depth, semantic_top_k)
+    t0 = time.time()
 
-    1. Do graph_depth hops (fast, structural, preferring influential edges)
-    2. Take discovered papers + seeds as positive set
-    3. Call S2 Recommendations API with positives and negatives
-    4. Union, deduplicate, cap to max_total
-    """
-    # Step 1: Graph hops
     graph_nodes = graph_hop(
         seed_ids, s2_client,
         max_depth=graph_depth,
@@ -179,8 +184,8 @@ def hybrid_expand(
     )
 
     graph_ids = set(graph_nodes.keys())
+    log.info("[HybridExpand] Graph hops found %d papers", len(graph_ids))
 
-    # Step 2: Semantic recommendations
     positive_pool = list(graph_ids)[:5]
     semantic_ids: set[str] = set()
 
@@ -193,14 +198,17 @@ def hybrid_expand(
         for rec in recs:
             if isinstance(rec, dict) and rec.get("paperId"):
                 semantic_ids.add(str(rec["paperId"]))
-    except Exception:
-        pass
+        log.info("[HybridExpand] Recommendations returned %d papers", len(semantic_ids))
+    except Exception as e:
+        log.warning("[HybridExpand] Recommendations failed: %s", e)
 
-    # Step 3: Union and deduplicate
     all_ids = graph_ids | semantic_ids
     seed_set = set(seed_ids)
     new_ids = [pid for pid in all_ids if pid not in seed_set]
 
+    log.info("[HybridExpand] Complete in %.2fs: %d new papers (%d graph + %d recs, capped at %d)",
+             time.time() - t0, len(new_ids[:max_total]), len(graph_ids - seed_set),
+             len(semantic_ids - graph_ids), max_total)
     return new_ids[:max_total]
 
 
@@ -213,6 +221,9 @@ def fetch_expanded_papers(
 
     if not paper_ids:
         return []
+
+    log.info("[GraphTraversal] Fetching full metadata for %d expanded papers", len(paper_ids))
+    t0 = time.time()
 
     raw_papers = s2_client.fetch_paper_batch(paper_ids)
     out: list[Paper] = []
@@ -228,6 +239,15 @@ def fetch_expanded_papers(
         arxiv_id = str(ext_ids.get("ArXiv", "") or "")
         doi = str(ext_ids.get("DOI", "") or "")
         cc = item.get("citationCount")
+        raw_authors = item.get("authors", [])
+        authors = []
+        if isinstance(raw_authors, list):
+            for a in raw_authors:
+                if isinstance(a, dict) and a.get("authorId"):
+                    authors.append({
+                        "authorId": str(a["authorId"]),
+                        "name": str(a.get("name", "")),
+                    })
 
         out.append(_paper_record(
             pid=f"s2:{pid}",
@@ -240,7 +260,11 @@ def fetch_expanded_papers(
             year=item.get("year") if isinstance(item.get("year"), int) else None,
             citation_count=cc if isinstance(cc, int) else 0,
             venue=str(item.get("venue", "") or ""),
-            topic_label="graph_expansion",
+            search_angle="graph_expansion",
+            authors=authors,
         ))
 
+    no_abstract = sum(1 for p in out if not p.get("abstract"))
+    log.info("[GraphTraversal] Fetched %d/%d papers in %.2fs (%d without abstracts)",
+             len(out), len(paper_ids), time.time() - t0, no_abstract)
     return out

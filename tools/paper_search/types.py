@@ -8,14 +8,16 @@ Paper = dict[str, Any]
 
 
 @dataclass
-class SearchTopic:
+class SearchQuery:
+    """A single search angle with per-API query strings."""
     label: str
-    keywords: list[str]
+    semantic_scholar: str = ""
+    arxiv: str = ""
+    openalex: str = ""
     year_from: int | None = None
     year_to: int | None = None
 
 
 @dataclass
 class SearchPlan:
-    topics: list[SearchTopic] = field(default_factory=list)
-    global_constraints: dict[str, Any] = field(default_factory=dict)
+    queries: list[SearchQuery] = field(default_factory=list)

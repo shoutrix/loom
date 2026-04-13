@@ -20,15 +20,9 @@ if TYPE_CHECKING:
     from loom.search.keyword import KeywordIndex
     from loom.graph.store import GraphStore
 
-SYSTEM_PROMPT = """You are Loom, a research knowledge assistant. You answer questions about the user's research library using retrieved context from their documents and knowledge graph.
+from loom.prompts import CHAT_SYSTEM, CHAT_ANSWER
 
-Rules:
-- Ground every claim in the retrieved context
-- Cite specific papers/documents when possible using [doc_id] notation
-- If the context doesn't contain enough information, say so clearly
-- Be precise and technical
-- Highlight cross-domain connections when relevant
-- Structure longer answers with clear headings"""
+SYSTEM_PROMPT = CHAT_SYSTEM
 
 
 @dataclass
@@ -188,9 +182,6 @@ class ChatEngine:
 
         parts.append(f"Retrieved context:\n{context}\n")
         parts.append(f"User question: {question}")
-        parts.append(
-            "\nAnswer the question using the retrieved context. "
-            "Cite sources using [doc_id]. If the context is insufficient, say so."
-        )
+        parts.append(f"\n{CHAT_ANSWER}")
 
         return "\n\n".join(parts)

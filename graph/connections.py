@@ -191,16 +191,8 @@ def deep_connection_scan(
     if not pairs_text:
         return []
 
-    prompt = (
-        "You are analyzing potential cross-domain connections in a research knowledge graph.\n\n"
-        "For each pair of entities from different research domains, determine:\n"
-        "1. Is there a meaningful intellectual connection? (not just superficial keyword overlap)\n"
-        "2. If yes, explain the deep connection in 2-3 sentences\n"
-        "3. Could understanding from one domain inform the other?\n\n"
-        "Pairs:\n" + "\n\n".join(pairs_text) + "\n\n"
-        "Return a JSON array with one entry per pair:\n"
-        '[{"connected": true, "description": "..."}, {"connected": false, "description": ""}, ...]'
-    )
+    from loom.prompts import CROSS_DOMAIN_CONNECTION
+    prompt = CROSS_DOMAIN_CONNECTION.format(pairs="\n\n".join(pairs_text))
 
     resp = llm.generate(prompt, model="pro", temperature=0.3, max_output_tokens=4096)
     confirmed: list[LatentConnection] = []

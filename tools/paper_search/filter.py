@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from loom.tools.paper_search.types import Paper
 from loom.tools.paper_search.utils import extract_json_object
+
+log = logging.getLogger(__name__)
 
 
 def llm_rank_papers(
@@ -31,28 +35,40 @@ def llm_rank_papers(
     if not papers:
         return []
 
+    log.info("[LLM Filter] Scoring %d papers in batches of %d (workers=%d)",
+             len(papers), batch_size, max_workers)
+    t0 = time.time()
+
     batches = [papers[i : i + batch_size] for i in range(0, len(papers), batch_size)]
+    log.info("[LLM Filter] Split into %d batches", len(batches))
 
     all_scores: dict[str, dict[str, Any]] = {}
 
-    def _score_batch(batch: list[Paper]) -> dict[str, dict[str, Any]]:
-        return _llm_score_batch(
+    def _score_batch(batch: list[Paper], batch_idx: int) -> dict[str, dict[str, Any]]:
+        bt0 = time.time()
+        result = _llm_score_batch(
             llm_provider, query=query, papers=batch,
             max_abstract_chars=max_abstract_chars,
         )
+        log.info("[LLM Filter] Batch %d: scored %d/%d papers in %.2fs",
+                 batch_idx, len(result), len(batch), time.time() - bt0)
+        return result
 
     if len(batches) == 1:
-        all_scores = _score_batch(batches[0])
+        all_scores = _score_batch(batches[0], 0)
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futs = {pool.submit(_score_batch, b): i for i, b in enumerate(batches)}
+            futs = {pool.submit(_score_batch, b, i): i for i, b in enumerate(batches)}
             for fut in as_completed(futs):
+                batch_idx = futs[fut]
                 try:
                     all_scores.update(fut.result())
-                except Exception:
-                    continue
+                except Exception as e:
+                    log.warning("[LLM Filter] Batch %d failed: %s", batch_idx, e)
 
     kept: list[Paper] = []
+    dropped = 0
+    no_score = 0
     for p in papers:
         pid = str(p.get("id", ""))
         info = all_scores.get(pid)
@@ -60,14 +76,32 @@ def llm_rank_papers(
             p["llm_relevance"] = 5
             p["llm_rationale"] = "LLM did not return a score; included by default"
             kept.append(p)
+            no_score += 1
             continue
         score = int(info.get("score", 0))
         p["llm_relevance"] = score
         p["llm_rationale"] = str(info.get("rationale", ""))
         if score >= 5:
             kept.append(p)
+        else:
+            dropped += 1
 
     kept.sort(key=lambda p: p.get("llm_relevance", 0), reverse=True)
+
+    elapsed = round(time.time() - t0, 2)
+    score_dist = {}
+    for p in kept:
+        s = p.get("llm_relevance", 0)
+        bucket = f"{s}-{s}"
+        score_dist[bucket] = score_dist.get(bucket, 0) + 1
+
+    log.info("[LLM Filter] Done in %.2fs: %d kept, %d dropped (score<5), %d unscored (default 5)",
+             elapsed, len(kept), dropped, no_score)
+    if kept:
+        top3 = kept[:3]
+        for p in top3:
+            log.info("[LLM Filter]   Top: [%d] %s", p.get("llm_relevance", 0), p.get("title", "")[:80])
+
     return kept
 
 
@@ -88,21 +122,8 @@ def _llm_score_batch(
             "abstract": abstract if abstract else "(no abstract)",
         })
 
-    prompt = (
-        "You are a research assistant evaluating papers for relevance to a query.\n\n"
-        f"QUERY: {query}\n\n"
-        f"PAPERS:\n{json.dumps(compact, indent=1)}\n\n"
-        "For EACH paper, assign a relevance score from 0-10:\n"
-        "  0-4: Not relevant (different topic, tangentially related at best)\n"
-        "  5-6: Somewhat relevant (related background, useful context)\n"
-        "  7-8: Relevant (directly addresses the topic or a key sub-problem)\n"
-        "  9-10: Highly relevant (core paper for this query)\n\n"
-        "When in doubt, lean towards including (score 5+) rather than excluding.\n"
-        "Papers that provide important foundational context should score 5-6.\n\n"
-        "Return a JSON array:\n"
-        '[{"id": "...", "score": 7, "rationale": "one-sentence reason"}]\n'
-        "Return ONLY the JSON array, no other text."
-    )
+    from loom.prompts import RELEVANCE_SCORE
+    prompt = RELEVANCE_SCORE.format(query=query, papers_json=json.dumps(compact, indent=1))
 
     resp = llm_provider.generate(prompt, model="flash", temperature=0.1, max_output_tokens=4096)
     text = resp.text or ""
@@ -123,6 +144,8 @@ def _llm_score_batch(
                     "score": _clamp_score(item.get("score", 5)),
                     "rationale": str(item.get("rationale", "")),
                 }
+    else:
+        log.warning("[LLM Filter] Failed to parse LLM scores from response (%d chars)", len(text))
 
     return results
 

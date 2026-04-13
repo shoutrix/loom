@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, UTC
 
 from loom.tools.paper_search.types import Paper
+
+log = logging.getLogger(__name__)
 
 CURRENT_YEAR = datetime.now(UTC).year
 
@@ -67,7 +71,7 @@ def _build_s2_id_map(papers: list[Paper]) -> dict[str, str]:
             s2_id_to_paper_id[pid[3:]] = pid
         arxiv = str(p.get("arxiv_id", ""))
         if arxiv:
-            s2_id_to_paper_id[f"ARXIV:{arxiv}"] = pid
+            s2_id_to_paper_id[f"ARXIV:{_normalize_arxiv_id(arxiv)}"] = pid
     return s2_id_to_paper_id
 
 
@@ -80,8 +84,12 @@ def _get_top_s2_candidates(papers: list[Paper], top_k: int) -> list[str]:
         if pid.startswith("s2:"):
             candidates.append(pid[3:])
         elif p.get("arxiv_id"):
-            candidates.append(f"ARXIV:{p['arxiv_id']}")
+            candidates.append(f"ARXIV:{_normalize_arxiv_id(str(p['arxiv_id']))}")
     return candidates
+
+
+def _normalize_arxiv_id(arxiv_id: str) -> str:
+    return arxiv_id.split("v")[0].strip()
 
 
 def compute_in_set_citation_density(
@@ -90,10 +98,13 @@ def compute_in_set_citation_density(
     top_k: int = 20,
     max_workers: int = 4,
 ) -> dict[str, int]:
+    log.info("[Scoring] Computing in-set citation density for %d papers (top_k=%d)", len(papers), top_k)
+    t0 = time.time()
     s2_id_to_paper_id = _build_s2_id_map(papers)
     candidates = _get_top_s2_candidates(papers, top_k)
 
     if not candidates or s2_client is None:
+        log.info("[Scoring] No candidates or no S2 client, skipping citation density")
         return {}
 
     in_degree: dict[str, int] = {pid: 0 for pid in s2_id_to_paper_id.values()}
@@ -113,6 +124,9 @@ def compute_in_set_citation_density(
                     target_pid = s2_id_to_paper_id[ref_id]
                     in_degree[target_pid] = in_degree.get(target_pid, 0) + 1
 
+    nonzero = sum(1 for v in in_degree.values() if v > 0)
+    log.info("[Scoring] Citation density done in %.2fs: %d papers with in-set citations",
+             time.time() - t0, nonzero)
     return in_degree
 
 
@@ -127,10 +141,13 @@ def compute_influential_citation_density(
     Also uses forward citations (papers citing this one) for richer signal.
     Methodology citations are weighted 2x over background citations.
     """
+    log.info("[Scoring] Computing influential citation density for %d papers (top_k=%d)", len(papers), top_k)
+    t0 = time.time()
     s2_id_to_paper_id = _build_s2_id_map(papers)
     candidates = _get_top_s2_candidates(papers, top_k)
 
     if not candidates or s2_client is None:
+        log.info("[Scoring] No candidates or no S2 client, skipping influential density")
         return {}
 
     influential_degree: dict[str, int] = {pid: 0 for pid in s2_id_to_paper_id.values()}
@@ -167,23 +184,67 @@ def compute_influential_citation_density(
                     weight = 2 if "methodology" in intents else 1
                     influential_degree[target_pid] = influential_degree.get(target_pid, 0) + weight
 
+    nonzero = sum(1 for v in influential_degree.values() if v > 0)
+    log.info("[Scoring] Influential density done in %.2fs: %d papers with influential citations",
+             time.time() - t0, nonzero)
     return influential_degree
+
+
+def compute_author_reputation(papers: list[Paper]) -> dict[str, float]:
+    """Score papers by author overlap within the result set.
+
+    If an author appears on multiple papers in the results, they're
+    likely a domain expert. Papers by repeat authors get a boost.
+    """
+    author_paper_count: dict[str, int] = {}
+    for p in papers:
+        authors = p.get("authors", [])
+        if not isinstance(authors, list):
+            continue
+        seen_in_paper: set[str] = set()
+        for a in authors:
+            if isinstance(a, dict):
+                aid = a.get("authorId", "")
+                if aid and aid not in seen_in_paper:
+                    author_paper_count[aid] = author_paper_count.get(aid, 0) + 1
+                    seen_in_paper.add(aid)
+
+    repeat_authors = {aid for aid, cnt in author_paper_count.items() if cnt >= 2}
+    log.info("[Scoring] Author analysis: %d unique authors, %d appear in 2+ papers",
+             len(author_paper_count), len(repeat_authors))
+
+    scores: dict[str, float] = {}
+    for p in papers:
+        pid = str(p.get("id", ""))
+        authors = p.get("authors", [])
+        if not isinstance(authors, list) or not authors:
+            scores[pid] = 0.0
+            continue
+        repeat_count = sum(
+            1 for a in authors
+            if isinstance(a, dict) and a.get("authorId", "") in repeat_authors
+        )
+        scores[pid] = min(1.0, repeat_count / max(1, len(repeat_authors)))
+    return scores
 
 
 def score_papers(
     papers: list[Paper],
     in_set_citations: dict[str, int] | None = None,
     influential_citations: dict[str, int] | None = None,
+    author_scores: dict[str, float] | None = None,
     *,
-    w_citation_velocity: float = 0.30,
+    w_citation_velocity: float = 0.25,
     w_in_set_density: float = 0.20,
-    w_influential: float = 0.15,
-    w_source_diversity: float = 0.10,
-    w_venue: float = 0.15,
+    w_influential: float = 0.20,
+    w_author: float = 0.10,
+    w_source_diversity: float = 0.05,
+    w_venue: float = 0.10,
     w_survey: float = 0.10,
 ) -> list[Paper]:
     if not papers:
         return []
+    log.info("[Scoring] Scoring %d papers with metadata weights", len(papers))
 
     velocities = [_citation_velocity(p) for p in papers]
     max_vel = max(velocities) if velocities else 1.0
@@ -200,11 +261,14 @@ def score_papers(
     if max_influential == 0:
         max_influential = 1
 
+    auth = author_scores or {}
+
     for i, paper in enumerate(papers):
         pid = str(paper.get("id", ""))
         vel_norm = velocities[i] / max_vel
         in_set_norm = in_set.get(pid, 0) / max_in_set
         influential_norm = influential.get(pid, 0) / max_influential
+        auth_norm = auth.get(pid, 0.0)
         src_score = _source_diversity_score(paper)
         ven_score = _venue_score(paper)
         survey = 1.0 if _is_survey(paper) else 0.0
@@ -213,6 +277,7 @@ def score_papers(
             w_citation_velocity * vel_norm
             + w_in_set_density * in_set_norm
             + w_influential * influential_norm
+            + w_author * auth_norm
             + w_source_diversity * src_score
             + w_venue * ven_score
             + w_survey * survey
@@ -222,6 +287,15 @@ def score_papers(
         paper["citation_velocity"] = round(velocities[i], 2)
         paper["in_set_citations"] = in_set.get(pid, 0)
         paper["influential_citations"] = influential.get(pid, 0)
+        paper["author_reputation"] = round(auth_norm, 3)
 
     papers.sort(key=lambda p: float(p.get("importance_score", 0.0)), reverse=True)
+    surveys = sum(1 for p in papers if p.get("is_survey"))
+    tier1 = sum(1 for p in papers if _venue_score(p) >= 1.0)
+    log.info("[Scoring] Scored %d papers: %d surveys, %d from tier-1 venues", len(papers), surveys, tier1)
+    if papers:
+        top = papers[0]
+        log.info("[Scoring] Top paper: [%.4f] %s (citations=%s, year=%s)",
+                 top.get("importance_score", 0), top.get("title", "")[:80],
+                 top.get("citation_count", 0), top.get("year"))
     return papers

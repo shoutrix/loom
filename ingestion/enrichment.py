@@ -16,22 +16,7 @@ if TYPE_CHECKING:
     from loom.llm.provider import LLMProvider
     from loom.ingestion.chunker import Chunk
 
-ENRICHMENT_PROMPT = """You are helping prepare document chunks for a semantic search index.
-
-Given a document's title and abstract/summary, write exactly 2 sentences that establish the context for any chunk from this document. These sentences will be prepended to each chunk before embedding.
-
-Requirements:
-- Mention the document title or key topic
-- Establish the domain and main contribution
-- Be factual and specific, not generic
-- Keep it under 60 words total
-
-Document title: {title}
-
-Abstract/Summary:
-{abstract}
-
-Write your 2-sentence context prefix:"""
+from loom.prompts import CHUNK_ENRICHMENT
 
 
 def generate_context_prefix(
@@ -40,7 +25,7 @@ def generate_context_prefix(
     abstract: str,
 ) -> str:
     """Generate a 2-sentence context prefix for all chunks in a document."""
-    prompt = ENRICHMENT_PROMPT.format(
+    prompt = CHUNK_ENRICHMENT.format(
         title=title,
         abstract=abstract[:1000],
     )

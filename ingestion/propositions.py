@@ -19,29 +19,7 @@ from loom.llm.provider import LLMProvider
 if TYPE_CHECKING:
     from loom.ingestion.chunker import Chunk
 
-PROPOSITION_PROMPT = """Decompose the following text into atomic, self-contained propositions.
-
-Rules:
-- Each proposition should express exactly ONE fact, claim, or relationship
-- Each proposition must be understandable WITHOUT reading the original text
-- De-contextualize: replace pronouns and references with their full names
-- Include specific numbers, metrics, and comparisons
-- Preserve technical terminology exactly
-- Skip meta-commentary ("In this section...", "We describe...")
-- Output as a JSON array of strings
-
-Example input:
-"Matcha-TTS uses optimal transport conditional flow matching for synthesis. Unlike diffusion models that require hundreds of steps, it achieves RTF < 0.1 with only 10 ODE steps."
-
-Example output:
-["Matcha-TTS uses optimal transport conditional flow matching for speech synthesis.", "Diffusion models typically require hundreds of iterative steps for generation.", "Matcha-TTS achieves a real-time factor (RTF) below 0.1.", "Matcha-TTS requires only 10 ODE solver steps for generation.", "Matcha-TTS is significantly faster than diffusion-based speech synthesis models."]
-
-Now decompose this text:
----
-{text}
----
-
-Output ONLY the JSON array:"""
+from loom.prompts import PROPOSITION_EXTRACT
 
 
 @dataclass
@@ -59,7 +37,7 @@ def _extract_batch(llm: LLMProvider, batch: list[Chunk], doc_id: str) -> list[tu
     combined_text = "\n\n---CHUNK BOUNDARY---\n\n".join(
         f"[Section: {c.section_title or 'untitled'}]\n{c.text}" for c in batch
     )
-    prompt = PROPOSITION_PROMPT.format(text=combined_text[:8000])
+    prompt = PROPOSITION_EXTRACT.format(text=combined_text[:8000])
     try:
         resp = llm.generate(prompt, model="flash", temperature=0.1, max_output_tokens=4096)
         parsed = _parse_propositions(resp.text)

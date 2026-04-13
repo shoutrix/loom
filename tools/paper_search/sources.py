@@ -1,16 +1,16 @@
 """
-Paper retrieval sources: arXiv, Semantic Scholar, OpenAlex, Crossref.
-
-Self-contained copy from parallax with all imports resolved locally.
+Paper retrieval sources: arXiv, Semantic Scholar, OpenAlex.
 """
 
 from __future__ import annotations
 
-import html
+import logging
 import random
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 from typing import Any
 
 import requests
@@ -18,29 +18,70 @@ import requests
 from loom.tools.paper_search.types import Paper
 from loom.tools.paper_search.utils import normalize_text
 
+log = logging.getLogger(__name__)
 
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
 OPENALEX_API_URL = "https://api.openalex.org/works"
-CROSSREF_API_URL = "https://api.crossref.org/works"
 SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 
 
 class RetryClient:
     def __init__(self) -> None:
         self.session = requests.Session()
-        self.last_request_time: float | None = None
-        self.request_interval = 1.0
+        self.last_request_time_by_host: dict[str, float] = {}
+        self.interval_by_host: dict[str, float] = {
+            "api.semanticscholar.org": 1.05,
+            "export.arxiv.org": 3.0,
+            "api.openalex.org": 0.5,
+        }
+        self.default_request_interval = 0.4
         self.max_retries = 4
         self.backoff_base = 1.0
         self.backoff_max = 30.0
+        self._rate_lock = threading.Lock()
+        self._log_lock = threading.Lock()
+        self._throttled_429: dict[str, dict[str, float]] = {}
 
-    def _wait_rate_limit(self) -> None:
+    def _wait_rate_limit(self, url: str) -> None:
+        host = urlparse(url).netloc.lower()
+        interval = self.interval_by_host.get(host, self.default_request_interval)
+        while True:
+            with self._rate_lock:
+                now = time.time()
+                last = self.last_request_time_by_host.get(host)
+                if last is None:
+                    self.last_request_time_by_host[host] = now
+                    return
+                elapsed = now - last
+                wait_for = interval - elapsed
+                if wait_for <= 0:
+                    self.last_request_time_by_host[host] = now
+                    return
+            time.sleep(wait_for)
+
+    def _log_retry(self, url: str, status_code: int, attempt: int, wait: float) -> None:
+        base = url.split("?")[0]
+        if status_code != 429:
+            log.warning("[HTTP] %s returned %d, retry %d/%d in %.1fs",
+                        base, status_code, attempt + 1, self.max_retries, wait)
+            return
+
+        # Collapse repetitive 429 lines per endpoint into periodic summaries.
         now = time.time()
-        if self.last_request_time is not None:
-            elapsed = now - self.last_request_time
-            if elapsed < self.request_interval:
-                time.sleep(self.request_interval - elapsed)
-        self.last_request_time = time.time()
+        with self._log_lock:
+            state = self._throttled_429.setdefault(base, {"last": 0.0, "suppressed": 0.0})
+            if now - state["last"] >= 10.0:
+                suppressed = int(state["suppressed"])
+                if suppressed > 0:
+                    log.warning("[HTTP] %s returned 429, retry %d/%d in %.1fs (%d similar 429s suppressed)",
+                                base, attempt + 1, self.max_retries, wait, suppressed)
+                else:
+                    log.warning("[HTTP] %s returned 429, retry %d/%d in %.1fs",
+                                base, attempt + 1, self.max_retries, wait)
+                state["last"] = now
+                state["suppressed"] = 0.0
+            else:
+                state["suppressed"] += 1
 
     def _retry_wait_seconds(self, attempt: int, response: requests.Response | None) -> float:
         if response is not None:
@@ -54,44 +95,70 @@ class RetryClient:
         return raw * random.uniform(0.8, 1.2)
 
     def get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
-        self._wait_rate_limit()
+        self._wait_rate_limit(url)
         for attempt in range(self.max_retries):
             response: requests.Response | None = None
             try:
                 response = self.session.get(url, params=params, timeout=30)
                 if response.status_code in (429, 500, 502, 503, 504):
+                    wait = self._retry_wait_seconds(attempt, response)
+                    self._log_retry(url, response.status_code, attempt, wait)
                     if attempt == self.max_retries - 1:
                         response.raise_for_status()
-                    time.sleep(self._retry_wait_seconds(attempt, response))
+                    time.sleep(wait)
                     continue
+                if 400 <= response.status_code < 500:
+                    # Non-retriable client errors (except 429) should fail fast.
+                    response.raise_for_status()
                 response.raise_for_status()
                 payload = response.json()
                 if isinstance(payload, dict):
                     return payload
                 return {"data": payload}
-            except requests.exceptions.RequestException:
-                if attempt == self.max_retries - 1:
+            except requests.exceptions.RequestException as e:
+                if response is not None and 400 <= response.status_code < 500 and response.status_code != 429:
+                    log.warning("[HTTP] %s non-retriable client error %d: %s",
+                                url.split("?")[0], response.status_code, e)
                     raise
-                time.sleep(self._retry_wait_seconds(attempt, response))
+                if attempt == self.max_retries - 1:
+                    log.error("[HTTP] %s failed after %d retries: %s", url.split("?")[0], self.max_retries, e)
+                    raise
+                wait = self._retry_wait_seconds(attempt, response)
+                log.warning("[HTTP] %s error: %s, retry %d/%d in %.1fs",
+                            url.split("?")[0], e, attempt + 1, self.max_retries, wait)
+                time.sleep(wait)
         return {}
 
     def get_text(self, url: str, params: dict[str, Any]) -> str:
-        self._wait_rate_limit()
+        self._wait_rate_limit(url)
         for attempt in range(self.max_retries):
             response: requests.Response | None = None
             try:
                 response = self.session.get(url, params=params, timeout=30)
                 if response.status_code in (429, 500, 502, 503, 504):
+                    wait = self._retry_wait_seconds(attempt, response)
+                    self._log_retry(url, response.status_code, attempt, wait)
                     if attempt == self.max_retries - 1:
                         response.raise_for_status()
-                    time.sleep(self._retry_wait_seconds(attempt, response))
+                    time.sleep(wait)
                     continue
+                if 400 <= response.status_code < 500:
+                    # Non-retriable client errors (except 429) should fail fast.
+                    response.raise_for_status()
                 response.raise_for_status()
                 return response.text
-            except requests.exceptions.RequestException:
-                if attempt == self.max_retries - 1:
+            except requests.exceptions.RequestException as e:
+                if response is not None and 400 <= response.status_code < 500 and response.status_code != 429:
+                    log.warning("[HTTP] %s non-retriable client error %d: %s",
+                                url.split("?")[0], response.status_code, e)
                     raise
-                time.sleep(self._retry_wait_seconds(attempt, response))
+                if attempt == self.max_retries - 1:
+                    log.error("[HTTP] %s failed after %d retries: %s", url.split("?")[0], self.max_retries, e)
+                    raise
+                wait = self._retry_wait_seconds(attempt, response)
+                log.warning("[HTTP] %s error: %s, retry %d/%d in %.1fs",
+                            url.split("?")[0], e, attempt + 1, self.max_retries, wait)
+                time.sleep(wait)
         return ""
 
 
@@ -107,7 +174,8 @@ def _paper_record(
     year: int | None = None,
     citation_count: int = 0,
     venue: str = "",
-    topic_label: str = "",
+    search_angle: str = "",
+    authors: list[dict[str, str]] | None = None,
 ) -> Paper:
     return {
         "id": pid,
@@ -120,17 +188,20 @@ def _paper_record(
         "citation_count": citation_count,
         "venue": venue,
         "sources": [source],
-        "topic_hits": [topic_label] if topic_label else [],
-        "keyword_overlap": 0.0,
+        "search_angles": [search_angle] if search_angle else [],
         "importance_score": 0.0,
+        "authors": authors or [],
     }
 
 
 class ArxivClient(RetryClient):
-    def search(self, query: str, *, limit: int, topic_label: str) -> list[Paper]:
-        params = {"search_query": query, "start": 0, "max_results": min(limit, 20)}
+    def search(self, query: str, *, limit: int = 15, search_angle: str = "") -> list[Paper]:
+        log.info("[arXiv] Searching: '%s' (limit=%d, angle='%s')", query[:80], limit, search_angle)
+        t0 = time.time()
+        params = {"search_query": query, "start": 0, "max_results": min(limit, 30)}
         xml_text = self.get_text(ARXIV_API_URL, params)
         if not xml_text:
+            log.warning("[arXiv] Empty response for query: '%s'", query[:80])
             return []
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         root = ET.fromstring(xml_text)
@@ -143,8 +214,9 @@ class ArxivClient(RetryClient):
             pid = f"arxiv:{arxiv_id or hash(title)}"
             out.append(_paper_record(
                 pid=pid, title=title, abstract=abstract[:1000],
-                source="arxiv", url=url, arxiv_id=arxiv_id, topic_label=topic_label,
+                source="arxiv", url=url, arxiv_id=arxiv_id, search_angle=search_angle,
             ))
+        log.info("[arXiv] Found %d papers in %.2fs for '%s'", len(out), time.time() - t0, query[:60])
         return out
 
 
@@ -153,16 +225,22 @@ class SemanticScholarClient(RetryClient):
         super().__init__()
         if api_key:
             self.session.headers.update({"x-api-key": api_key})
+            log.info("[S2] Initialized with API key")
+        else:
+            log.info("[S2] Initialized without API key (rate limits will be stricter)")
 
-    def search(self, query: str, *, limit: int, topic_label: str) -> list[Paper]:
+    def search(self, query: str, *, limit: int = 50, search_angle: str = "") -> list[Paper]:
+        log.info("[S2] Searching: '%s' (limit=%d, angle='%s')", query[:80], limit, search_angle)
+        t0 = time.time()
         params = {
             "query": query,
-            "limit": str(min(limit, 20)),
-            "fields": "paperId,title,abstract,year,url,externalIds,citationCount,venue",
+            "limit": str(min(limit, 100)),
+            "fields": "paperId,title,abstract,year,url,externalIds,citationCount,venue,authors",
         }
         data = self.get_json(SEMANTIC_SCHOLAR_API_URL, params)
         items = data.get("data", [])
         if not isinstance(items, list):
+            log.warning("[S2] Unexpected response format for query: '%s'", query[:80])
             return []
         out: list[Paper] = []
         for item in items:
@@ -175,6 +253,15 @@ class SemanticScholarClient(RetryClient):
             if not pid:
                 pid = f"s2:{hash(str(item.get('title', '')))}"
             cc = item.get("citationCount")
+            raw_authors = item.get("authors", [])
+            authors = []
+            if isinstance(raw_authors, list):
+                for a in raw_authors:
+                    if isinstance(a, dict) and a.get("authorId"):
+                        authors.append({
+                            "authorId": str(a["authorId"]),
+                            "name": str(a.get("name", "")),
+                        })
             out.append(_paper_record(
                 pid=f"s2:{pid}",
                 title=str(item.get("title", "") or ""),
@@ -183,24 +270,23 @@ class SemanticScholarClient(RetryClient):
                 doi=doi, arxiv_id=arxiv_id,
                 year=item.get("year") if isinstance(item.get("year"), int) else None,
                 citation_count=cc if isinstance(cc, int) else 0,
-                venue=str(item.get("venue", "") or ""), topic_label=topic_label,
+                venue=str(item.get("venue", "") or ""), search_angle=search_angle,
+                authors=authors,
             ))
+        log.info("[S2] Found %d papers in %.2fs for '%s'", len(out), time.time() - t0, query[:60])
         return out
 
     def fetch_references(
         self, paper_id: str, limit: int = 100, *, rich: bool = False,
     ) -> list[dict[str, Any]] | list[str]:
-        """Fetch papers cited BY this paper (backward references).
-
-        With rich=True, returns dicts with paperId, isInfluential, intents.
-        With rich=False (default), returns bare paperId strings for backward compat.
-        """
+        log.debug("[S2] Fetching references for %s (rich=%s)", paper_id[:20], rich)
         url = f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}/references"
         fields = "paperId,isInfluential,intents" if rich else "paperId"
         params = {"fields": fields, "limit": str(min(limit, 1000))}
         try:
             data = self.get_json(url, params)
-        except Exception:
+        except Exception as e:
+            log.warning("[S2] Failed to fetch references for %s: %s", paper_id[:20], e)
             return []
         items = data.get("data", [])
         if not isinstance(items, list):
@@ -218,6 +304,8 @@ class SemanticScholarClient(RetryClient):
                         "isInfluential": bool(item.get("isInfluential", False)),
                         "intents": item.get("intents", []) if isinstance(item.get("intents"), list) else [],
                     })
+            influential_count = sum(1 for r in out if r.get("isInfluential"))
+            log.debug("[S2] References for %s: %d total, %d influential", paper_id[:20], len(out), influential_count)
             return out
         else:
             out_ids: list[str] = []
@@ -226,15 +314,13 @@ class SemanticScholarClient(RetryClient):
                     cited = item.get("citedPaper", {})
                     if isinstance(cited, dict) and cited.get("paperId"):
                         out_ids.append(str(cited["paperId"]))
+            log.debug("[S2] References for %s: %d IDs", paper_id[:20], len(out_ids))
             return out_ids
 
     def fetch_citations(
         self, paper_id: str, limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """Fetch papers that CITE this paper (forward citations).
-
-        Returns dicts with paperId, isInfluential, intents.
-        """
+        log.debug("[S2] Fetching citations for %s", paper_id[:20])
         url = f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}/citations"
         params = {
             "fields": "paperId,isInfluential,intents",
@@ -242,7 +328,8 @@ class SemanticScholarClient(RetryClient):
         }
         try:
             data = self.get_json(url, params)
-        except Exception:
+        except Exception as e:
+            log.warning("[S2] Failed to fetch citations for %s: %s", paper_id[:20], e)
             return []
         items = data.get("data", [])
         if not isinstance(items, list):
@@ -258,6 +345,8 @@ class SemanticScholarClient(RetryClient):
                     "isInfluential": bool(item.get("isInfluential", False)),
                     "intents": item.get("intents", []) if isinstance(item.get("intents"), list) else [],
                 })
+        influential_count = sum(1 for c in out if c.get("isInfluential"))
+        log.debug("[S2] Citations for %s: %d total, %d influential", paper_id[:20], len(out), influential_count)
         return out
 
     def fetch_recommendations(
@@ -266,10 +355,9 @@ class SemanticScholarClient(RetryClient):
         negative_ids: list[str] | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Fetch embedding-based similar papers via the S2 Recommendations API.
-
-        Uses BERT text embeddings + citation graph embeddings under the hood.
-        """
+        log.info("[S2] Fetching recommendations (positives=%d, negatives=%d, limit=%d)",
+                 len(positive_ids), len(negative_ids or []), limit)
+        t0 = time.time()
         if len(positive_ids) == 1:
             url = f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{positive_ids[0]}"
             params: dict[str, Any] = {
@@ -278,7 +366,8 @@ class SemanticScholarClient(RetryClient):
             }
             try:
                 data = self.get_json(url, params)
-            except Exception:
+            except Exception as e:
+                log.warning("[S2] Recommendations failed: %s", e)
                 return []
             items = data.get("recommendedPapers", [])
         else:
@@ -289,7 +378,7 @@ class SemanticScholarClient(RetryClient):
             if negative_ids:
                 body["negativePaperIds"] = negative_ids[:5]
             try:
-                self._wait_rate_limit()
+                self._wait_rate_limit(url)
                 response = self.session.post(
                     url,
                     json=body,
@@ -299,7 +388,8 @@ class SemanticScholarClient(RetryClient):
                 )
                 response.raise_for_status()
                 data = response.json()
-            except Exception:
+            except Exception as e:
+                log.warning("[S2] Recommendations failed: %s", e)
                 return []
             items = data.get("recommendedPapers", [])
 
@@ -309,18 +399,20 @@ class SemanticScholarClient(RetryClient):
         for item in items:
             if isinstance(item, dict) and item.get("paperId"):
                 out.append(item)
+        log.info("[S2] Got %d recommendations in %.2fs", len(out), time.time() - t0)
         return out
 
     def fetch_paper_batch(
         self, paper_ids: list[str],
     ) -> list[dict[str, Any]]:
-        """Fetch full metadata for multiple papers via the batch endpoint."""
         if not paper_ids:
             return []
+        log.info("[S2] Batch-fetching metadata for %d papers", len(paper_ids))
+        t0 = time.time()
         url = "https://api.semanticscholar.org/graph/v1/paper/batch"
-        fields = "paperId,title,abstract,year,citationCount,venue,externalIds,url"
+        fields = "paperId,title,abstract,year,citationCount,venue,externalIds,url,authors"
         try:
-            self._wait_rate_limit()
+            self._wait_rate_limit(url)
             response = self.session.post(
                 url,
                 json={"ids": paper_ids[:500]},
@@ -329,10 +421,14 @@ class SemanticScholarClient(RetryClient):
             )
             response.raise_for_status()
             data = response.json()
-        except Exception:
+        except Exception as e:
+            log.warning("[S2] Batch fetch failed: %s", e)
             return []
         if isinstance(data, list):
-            return [p for p in data if isinstance(p, dict) and p.get("paperId")]
+            result = [p for p in data if isinstance(p, dict) and p.get("paperId")]
+            log.info("[S2] Batch returned %d/%d papers in %.2fs", len(result), len(paper_ids), time.time() - t0)
+            return result
+        log.warning("[S2] Batch returned unexpected type: %s", type(data).__name__)
         return []
 
 
@@ -346,11 +442,14 @@ def _openalex_abstract(inv_index: dict[str, list[int]]) -> str:
 
 
 class OpenAlexClient(RetryClient):
-    def search(self, query: str, *, limit: int, topic_label: str) -> list[Paper]:
+    def search(self, query: str, *, limit: int = 30, search_angle: str = "") -> list[Paper]:
+        log.info("[OpenAlex] Searching: '%s' (limit=%d, angle='%s')", query[:80], limit, search_angle)
+        t0 = time.time()
         params = {"search": query, "per_page": min(limit, 50), "sort": "cited_by_count:desc"}
         data = self.get_json(OPENALEX_API_URL, params)
         items = data.get("results", [])
         if not isinstance(items, list):
+            log.warning("[OpenAlex] Unexpected response format for query: '%s'", query[:80])
             return []
         out: list[Paper] = []
         for item in items:
@@ -377,44 +476,7 @@ class OpenAlexClient(RetryClient):
                 doi=doi,
                 year=item.get("publication_year") if isinstance(item.get("publication_year"), int) else None,
                 citation_count=cc if isinstance(cc, int) else 0,
-                venue=venue, topic_label=topic_label,
+                venue=venue, search_angle=search_angle,
             ))
-        return out
-
-
-class CrossrefClient(RetryClient):
-    def search(self, query: str, *, limit: int, topic_label: str) -> list[Paper]:
-        params = {"query": query, "rows": min(limit, 50), "sort": "relevance", "order": "desc"}
-        data = self.get_json(CROSSREF_API_URL, params)
-        items = data.get("message", {}).get("items", [])
-        if not isinstance(items, list):
-            return []
-        out: list[Paper] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            titles = item.get("title", [])
-            title = str(titles[0]) if isinstance(titles, list) and titles else ""
-            abstract_raw = str(item.get("abstract", "") or "")
-            abstract = re.sub(r"<[^>]+>", " ", html.unescape(abstract_raw))
-            doi = str(item.get("DOI", "") or "")
-            url = str(item.get("URL", "") or "")
-            year = None
-            issued = item.get("issued", {})
-            if isinstance(issued, dict):
-                parts = issued.get("date-parts", [])
-                if isinstance(parts, list) and parts and isinstance(parts[0], list) and parts[0]:
-                    y = parts[0][0]
-                    if isinstance(y, int):
-                        year = y
-            cc = item.get("is-referenced-by-count")
-            container = item.get("container-title", [])
-            venue = str(container[0]) if isinstance(container, list) and container else ""
-            out.append(_paper_record(
-                pid=f"crossref:{doi or hash(title)}",
-                title=title, abstract=abstract[:900], source="crossref",
-                url=url, doi=doi, year=year,
-                citation_count=cc if isinstance(cc, int) else 0,
-                venue=venue, topic_label=topic_label,
-            ))
+        log.info("[OpenAlex] Found %d papers in %.2fs for '%s'", len(out), time.time() - t0, query[:60])
         return out

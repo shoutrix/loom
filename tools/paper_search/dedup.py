@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from loom.tools.paper_search.types import Paper
+
+log = logging.getLogger(__name__)
 
 
 def normalize_title(title: str) -> str:
@@ -31,17 +34,24 @@ def _merge_paper(base: Paper, candidate: Paper) -> Paper:
     src = set(base.get("sources", []))
     src.update(candidate.get("sources", []))
     base["sources"] = sorted(src)
-    topics = set(base.get("topic_hits", []))
-    topics.update(candidate.get("topic_hits", []))
-    base["topic_hits"] = sorted(topics)
+    angles = set(base.get("search_angles", []))
+    angles.update(candidate.get("search_angles", []))
+    base["search_angles"] = sorted(angles)
+    if not base.get("authors") and candidate.get("authors"):
+        base["authors"] = candidate["authors"]
     return base
 
 
 def deduplicate_papers(papers: list[Paper]) -> list[Paper]:
+    log.info("[Dedup] Deduplicating %d papers", len(papers))
     by_doi: dict[str, Paper] = {}
     by_arxiv: dict[str, Paper] = {}
     by_title: dict[str, Paper] = {}
     uniques: list[Paper] = []
+
+    doi_merges = 0
+    arxiv_merges = 0
+    title_merges = 0
 
     for p in papers:
         doi = str(p.get("doi", "")).strip().lower()
@@ -51,10 +61,13 @@ def deduplicate_papers(papers: list[Paper]) -> list[Paper]:
         target: Paper | None = None
         if doi and doi in by_doi:
             target = by_doi[doi]
+            doi_merges += 1
         elif arxiv_id and arxiv_id in by_arxiv:
             target = by_arxiv[arxiv_id]
+            arxiv_merges += 1
         elif ntitle and ntitle in by_title:
             target = by_title[ntitle]
+            title_merges += 1
 
         if target is not None:
             _merge_paper(target, p)
@@ -68,4 +81,8 @@ def deduplicate_papers(papers: list[Paper]) -> list[Paper]:
             by_arxiv[arxiv_id] = new_p
         if ntitle:
             by_title[ntitle] = new_p
+
+    total_merges = doi_merges + arxiv_merges + title_merges
+    log.info("[Dedup] %d → %d unique (merged %d: %d DOI, %d arXiv, %d title)",
+             len(papers), len(uniques), total_merges, doi_merges, arxiv_merges, title_merges)
     return uniques

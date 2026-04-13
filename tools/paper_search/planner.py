@@ -1,51 +1,77 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 
-from loom.tools.paper_search.types import SearchPlan, SearchTopic
+from loom.tools.paper_search.types import SearchPlan, SearchQuery
 from loom.tools.paper_search.utils import extract_json_object
 
-MAX_TOPICS = 4
+log = logging.getLogger(__name__)
+
+MAX_QUERY_ANGLES = 5
 
 
-def generate_search_plan(llm_provider, model: str, query: str) -> SearchPlan:
+def generate_search_plan(llm_provider, model: str, user_query: str) -> SearchPlan:
+    """Ask the LLM to produce per-API search queries for each research angle.
+
+    Each angle gets a tailored query string for Semantic Scholar (natural
+    language), arXiv (short keyword phrases), and OpenAlex (keyword + topic).
+    """
+    log.info("[Planner] Generating search plan for: %s", user_query[:120])
+    t0 = time.time()
+
     schema = {
-        "topics": [
-            {"label": "string", "keywords": ["string"], "year_from": "integer|null", "year_to": "integer|null"}
+        "queries": [
+            {
+                "label": "short description of this search angle",
+                "semantic_scholar": "natural language query optimized for Semantic Scholar's semantic search",
+                "arxiv": "short keyword phrase for arXiv (2-5 words, no boolean operators)",
+                "openalex": "keyword query for OpenAlex search",
+                "year_from": "integer|null",
+                "year_to": "integer|null",
+            }
         ],
     }
-    prompt = (
-        "You are an expert research planner for academic paper discovery.\n"
-        "Break the query into 3-4 distinct research topics with strong search keywords.\n"
-        "Keywords must be concrete and academic, optimized for arXiv/Semantic Scholar.\n\n"
-        f"User Query: {query}\n\n"
-        f"JSON schema:\n{json.dumps(schema, indent=2)}"
-    )
-    response = llm_provider.generate(prompt, model=model, temperature=0.1, max_output_tokens=2048)
+    from loom.prompts import SEARCH_PLAN
+    prompt = SEARCH_PLAN.format(query=user_query, schema=json.dumps(schema, indent=2))
+    response = llm_provider.generate(prompt, model=model, temperature=0.2, max_output_tokens=4096)
+    elapsed = round(time.time() - t0, 2)
+    log.info("[Planner] LLM responded in %.2fs", elapsed)
+
     parsed = extract_json_object(response.text or "")
     if not parsed:
+        log.warning("[Planner] Failed to parse LLM response as JSON")
         return SearchPlan()
 
-    topics_raw = parsed.get("topics")
-    if not isinstance(topics_raw, list):
+    queries_raw = parsed.get("queries")
+    if not isinstance(queries_raw, list):
+        log.warning("[Planner] LLM response missing 'queries' array")
         return SearchPlan()
 
-    topics: list[SearchTopic] = []
-    for topic in topics_raw[:MAX_TOPICS]:
-        if not isinstance(topic, dict):
+    queries: list[SearchQuery] = []
+    for item in queries_raw[:MAX_QUERY_ANGLES]:
+        if not isinstance(item, dict):
             continue
-        label = str(topic.get("label", "")).strip()
-        kws = topic.get("keywords", [])
-        if not label or not isinstance(kws, list):
+        label = str(item.get("label", "")).strip()
+        s2 = str(item.get("semantic_scholar", "")).strip()
+        arxiv = str(item.get("arxiv", "")).strip()
+        openalex = str(item.get("openalex", "")).strip()
+        if not label or not (s2 or arxiv or openalex):
             continue
-        keywords = [str(k).strip() for k in kws if str(k).strip()][:12]
-        if not keywords:
-            continue
-        topics.append(SearchTopic(
-            label=label, keywords=keywords,
-            year_from=topic.get("year_from") if isinstance(topic.get("year_from"), int) else None,
-            year_to=topic.get("year_to") if isinstance(topic.get("year_to"), int) else None,
+        queries.append(SearchQuery(
+            label=label,
+            semantic_scholar=s2,
+            arxiv=arxiv,
+            openalex=openalex,
+            year_from=item.get("year_from") if isinstance(item.get("year_from"), int) else None,
+            year_to=item.get("year_to") if isinstance(item.get("year_to"), int) else None,
         ))
 
-    return SearchPlan(topics=topics, global_constraints=parsed.get("global_constraints", {}))
+    for q in queries:
+        log.info("[Planner]   Angle: '%s' | S2: '%s' | arXiv: '%s' | OA: '%s'",
+                 q.label, q.semantic_scholar[:60], q.arxiv, q.openalex[:60])
+
+    log.info("[Planner] Generated %d search angles in %.2fs", len(queries), elapsed)
+    return SearchPlan(queries=queries)

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -12,9 +18,10 @@ class PaperSearchRequest(BaseModel):
     query: str
     max_results: int = 20
     enable_graph_expansion: bool = True
-    graph_expansion_depth: int = 1
-    graph_expansion_max_papers: int = 30
-    only_influential_hops: bool = False
+    graph_expansion_depth: int = 2
+    graph_expansion_max_papers: int = 40
+    only_influential_hops: bool = True
+    enable_recommendations: bool = True
 
 
 class PaperReadRequest(BaseModel):
@@ -24,6 +31,158 @@ class PaperReadRequest(BaseModel):
 class PaperQueueRequest(BaseModel):
     paper_ids: list[str] = []
     identifiers: list[str] = []
+
+
+@dataclass
+class SearchStep:
+    key: str
+    label: str
+    status: str = "pending"  # pending | in_progress | done | cancelled
+
+
+@dataclass
+class SearchJob:
+    job_id: str
+    request: PaperSearchRequest
+    created_at: float = field(default_factory=time.time)
+    state: str = "running"  # running | completed | cancelled | failed
+    steps: list[SearchStep] = field(default_factory=list)
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    stop_event: threading.Event = field(default_factory=threading.Event)
+
+
+def _default_steps() -> list[SearchStep]:
+    return [
+        SearchStep("plan", "Planning search"),
+        SearchStep("retrieve", "Searching sources"),
+        SearchStep("dedup", "Removing duplicates"),
+        SearchStep("llm_relevance", "Scoring relevance"),
+        SearchStep("multi_hop", "Exploring citations"),
+        SearchStep("deep_rank", "Ranking by influence"),
+        SearchStep("root_discovery", "Finding foundational papers"),
+        SearchStep("complete", "Finalizing results"),
+    ]
+
+
+class SearchJobManager:
+    def __init__(self) -> None:
+        self._jobs: dict[str, SearchJob] = {}
+        self._lock = threading.Lock()
+
+    def start(self, req: PaperSearchRequest) -> str:
+        job_id = str(uuid.uuid4())
+        job = SearchJob(job_id=job_id, request=req, steps=_default_steps())
+        with self._lock:
+            self._jobs[job_id] = job
+        thread = threading.Thread(target=self._run_job, args=(job_id,), daemon=True)
+        thread.start()
+        return job_id
+
+    def stop(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if not job:
+            return False
+        job.stop_event.set()
+        return True
+
+    def status(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return None
+            return {
+                "state": job.state,
+                "error": job.error,
+                "steps": [{"key": s.key, "label": s.label, "status": s.status} for s in job.steps],
+            }
+
+    def result(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return None
+            if job.result is None:
+                return {"ready": False, "state": job.state, "error": job.error}
+            return {"ready": True, "state": job.state, "result": job.result}
+
+    def _set_step(self, job: SearchJob, key: str, status: str) -> None:
+        for idx, step in enumerate(job.steps):
+            if step.key == key:
+                step.status = status
+                if status == "in_progress":
+                    for prev in job.steps[:idx]:
+                        if prev.status == "pending":
+                            prev.status = "done"
+                break
+
+    def _run_job(self, job_id: str) -> None:
+        from loom.main import get_app_state
+        from loom.tools.paper_search.tool import search_papers
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if not job:
+            return
+
+        state = get_app_state()
+
+        def progress_cb(step: str, status: str) -> None:
+            with self._lock:
+                if job_id not in self._jobs:
+                    return
+                self._set_step(job, step, status)
+
+        def is_cancelled() -> bool:
+            return job.stop_event.is_set()
+
+        try:
+            result = search_papers(
+                state.llm,
+                job.request.query,
+                max_results=job.request.max_results,
+                semantic_scholar_api_key=state.settings.semantic_scholar_api_key or None,
+                enable_graph_expansion=job.request.enable_graph_expansion,
+                graph_expansion_depth=job.request.graph_expansion_depth,
+                graph_expansion_max_papers=job.request.graph_expansion_max_papers,
+                only_influential_hops=job.request.only_influential_hops,
+                enable_recommendations=job.request.enable_recommendations,
+                progress_cb=progress_cb,
+                is_cancelled=is_cancelled,
+            )
+
+            with self._lock:
+                if result.get("cancelled"):
+                    job.state = "cancelled"
+                    for step in job.steps:
+                        if step.status == "in_progress":
+                            step.status = "cancelled"
+                    job.result = None
+                    return
+
+            papers = result.get("papers", [])
+            registered = state.registry.register_from_search(papers)
+            if registered > 0:
+                state.registry.save()
+            result["registry"] = {"newly_registered": registered}
+
+            with self._lock:
+                job.state = "completed"
+                job.result = result
+                for step in job.steps:
+                    if step.status in ("pending", "in_progress"):
+                        step.status = "done"
+        except Exception as e:
+            with self._lock:
+                job.state = "failed"
+                job.error = str(e)
+                for step in job.steps:
+                    if step.status == "in_progress":
+                        step.status = "cancelled"
+
+
+_search_jobs = SearchJobManager()
 
 
 @router.post("/search")
@@ -41,6 +200,7 @@ def search_papers_endpoint(req: PaperSearchRequest) -> dict:
         graph_expansion_depth=req.graph_expansion_depth,
         graph_expansion_max_papers=req.graph_expansion_max_papers,
         only_influential_hops=req.only_influential_hops,
+        enable_recommendations=req.enable_recommendations,
     )
 
     papers = result.get("papers", [])
@@ -50,6 +210,34 @@ def search_papers_endpoint(req: PaperSearchRequest) -> dict:
     result["registry"] = {"newly_registered": registered}
 
     return result
+
+
+@router.post("/search/start")
+def start_search_job(req: PaperSearchRequest) -> dict:
+    job_id = _search_jobs.start(req)
+    return {"search_id": job_id}
+
+
+@router.get("/search/{search_id}/status")
+def search_job_status(search_id: str) -> dict:
+    status = _search_jobs.status(search_id)
+    if not status:
+        return {"error": "Search not found"}
+    return status
+
+
+@router.get("/search/{search_id}/result")
+def search_job_result(search_id: str) -> dict:
+    result = _search_jobs.result(search_id)
+    if not result:
+        return {"error": "Search not found"}
+    return result
+
+
+@router.post("/search/{search_id}/stop")
+def stop_search_job(search_id: str) -> dict:
+    stopped = _search_jobs.stop(search_id)
+    return {"stopped": stopped}
 
 
 @router.post("/read")

@@ -240,12 +240,8 @@ def _flash_gray_zone_resolve(
             f"  Candidate: \"{candidate['name']}\" (similarity={candidate['similarity']:.2f})"
         )
 
-    prompt = (
-        "For each pair, decide if the new entity should MERGE with the candidate "
-        "or be kept as a SEPARATE entity.\n\n"
-        "Pairs:\n" + "\n".join(pairs_text) + "\n\n"
-        "Reply with a JSON array of decisions, one per pair: [\"merge\", \"separate\", ...]"
-    )
+    from loom.prompts import ENTITY_RESOLUTION_FLASH
+    prompt = ENTITY_RESOLUTION_FLASH.format(pairs="\n".join(pairs_text))
 
     resp = llm.generate(prompt, model="flash", temperature=0.1, max_output_tokens=512)
     try:
@@ -299,17 +295,9 @@ def _pro_batch_resolve(
             f"Candidates:\n{candidates_text}"
         )
 
-    prompt = (
-        "You are resolving entity references in a knowledge graph.\n"
-        "For each entity, decide:\n"
-        "- MERGE with candidate [id] if they refer to the same concept\n"
-        "- NEW if this is a genuinely distinct concept\n\n"
-        "Consider context carefully. Same name ≠ same concept "
-        "(e.g., 'transformer' in ML vs electrical engineering).\n\n"
-        + "\n\n".join(f"--- Entity {i+1} ---\n{t}" for i, t in enumerate(entries_text))
-        + "\n\nReturn a JSON array with one entry per entity: "
-        "[{\"action\": \"merge\", \"target_id\": \"xxx\"}, {\"action\": \"new\"}, ...]"
-    )
+    from loom.prompts import ENTITY_RESOLUTION_STRUCTURED
+    entries_formatted = "\n\n".join(f"--- Entity {i+1} ---\n{t}" for i, t in enumerate(entries_text))
+    prompt = ENTITY_RESOLUTION_STRUCTURED.format(entries=entries_formatted)
 
     # Use flash for resolution -- pro's thinking budget consumes too many tokens
     resp = llm.generate(prompt, model="flash", temperature=0.1, max_output_tokens=2048)

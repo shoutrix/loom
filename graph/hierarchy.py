@@ -159,15 +159,10 @@ def _resummarize_dirty(llm: LLMProvider, graph: GraphStore) -> int:
                         f"{': ' + rel.description if rel.description else ''}"
                     )
 
-        prompt = (
-            "Summarize this cluster of related research concepts.\n\n"
-            f"Entities:\n" + "\n".join(entities_text[:20]) + "\n\n"
-            f"Relationships:\n" + "\n".join(rels_text[:20]) + "\n\n"
-            "Write a 3-5 sentence summary covering:\n"
-            "1. What this cluster is about (main theme)\n"
-            "2. Key insights and contributions\n"
-            "3. Any tensions, open questions, or competing approaches\n"
-            "Be specific and technical."
+        from loom.prompts import COMMUNITY_SUMMARY
+        prompt = COMMUNITY_SUMMARY.format(
+            entities="\n".join(entities_text[:20]),
+            relationships="\n".join(rels_text[:20]),
         )
 
         try:

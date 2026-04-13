@@ -32,6 +32,18 @@ export const api = {
   searchPapers: (query: string, maxResults = 20) =>
     post('/papers/search', { query, max_results: maxResults, enable_graph_expansion: true }),
 
+  startSearch: (query: string, maxResults = 20) =>
+    post('/papers/search/start', { query, max_results: maxResults, enable_graph_expansion: true }),
+
+  searchStatus: (searchId: string) =>
+    get(`/papers/search/${encodeURIComponent(searchId)}/status`),
+
+  searchResult: (searchId: string) =>
+    get(`/papers/search/${encodeURIComponent(searchId)}/result`),
+
+  stopSearch: (searchId: string) =>
+    post(`/papers/search/${encodeURIComponent(searchId)}/stop`),
+
   readPaper: (identifier: string) =>
     post('/papers/read', { identifier }),
 
