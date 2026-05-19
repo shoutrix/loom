@@ -10,7 +10,7 @@ from loom.tools.paper_search.utils import extract_json_object
 
 log = logging.getLogger(__name__)
 
-MAX_QUERY_ANGLES = 5
+MAX_QUERY_ANGLES = 7
 
 
 def generate_search_plan(llm_provider, model: str, user_query: str) -> SearchPlan:

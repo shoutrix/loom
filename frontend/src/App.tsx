@@ -216,7 +216,11 @@ export default function App() {
           <div className="flex-1 overflow-hidden bg-white">
             {currentTab?.type === 'notes' && <NoteEditor />}
             {currentTab?.type === 'paper' && currentTab.paperMeta && (
-              <PaperViewer paperId={currentTab.paperMeta.paper_id} title={currentTab.paperMeta.title} />
+              <PaperViewer
+                paperId={currentTab.paperMeta.paper_id}
+                title={currentTab.paperMeta.title}
+                onOpenPaper={(pid, t) => openPaperTab({ paper_id: pid, title: t })}
+              />
             )}
           </div>
         </main>

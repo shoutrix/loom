@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import requests
 from fastapi import APIRouter
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/papers", tags=["papers"])
@@ -54,12 +57,17 @@ class SearchJob:
 
 def _default_steps() -> list[SearchStep]:
     return [
+        SearchStep("scholar_scout", "Scouting Google Scholar"),
+        SearchStep("discovery_read", "Analyzing discoveries"),
+        SearchStep("academic_retrieve", "Searching academic sources"),
         SearchStep("plan", "Planning search"),
         SearchStep("retrieve", "Searching sources"),
         SearchStep("dedup", "Removing duplicates"),
         SearchStep("llm_relevance", "Scoring relevance"),
+        SearchStep("rerank", "Re-ranking candidates"),
         SearchStep("multi_hop", "Exploring citations"),
         SearchStep("deep_rank", "Ranking by influence"),
+        SearchStep("diversity", "Selecting diverse results"),
         SearchStep("root_discovery", "Finding foundational papers"),
         SearchStep("complete", "Finalizing results"),
     ]
@@ -143,6 +151,7 @@ class SearchJobManager:
                 job.request.query,
                 max_results=job.request.max_results,
                 semantic_scholar_api_key=state.settings.semantic_scholar_api_key or None,
+                serper_api_key=state.settings.serper_api_key or None,
                 enable_graph_expansion=job.request.enable_graph_expansion,
                 graph_expansion_depth=job.request.graph_expansion_depth,
                 graph_expansion_max_papers=job.request.graph_expansion_max_papers,
@@ -196,6 +205,7 @@ def search_papers_endpoint(req: PaperSearchRequest) -> dict:
         req.query,
         max_results=req.max_results,
         semantic_scholar_api_key=state.settings.semantic_scholar_api_key or None,
+        serper_api_key=state.settings.serper_api_key or None,
         enable_graph_expansion=req.enable_graph_expansion,
         graph_expansion_depth=req.graph_expansion_depth,
         graph_expansion_max_papers=req.graph_expansion_max_papers,
@@ -312,6 +322,126 @@ def list_registry() -> dict:
     }
 
 
+class ExploreGraphRequest(BaseModel):
+    paper_id: str
+    title: str = ""
+    abstract: str = ""
+
+
+_explore_jobs: dict[str, dict[str, Any]] = {}
+_explore_lock = threading.Lock()
+
+
+@router.post("/explore-graph/start")
+def start_explore_graph(req: ExploreGraphRequest) -> dict:
+    from loom.main import get_app_state
+    from loom.tools.paper_search.tool import explore_paper_graph
+
+    state = get_app_state()
+    job_id = str(uuid.uuid4())
+
+    with _explore_lock:
+        _explore_jobs[job_id] = {
+            "state": "running", "steps": [], "result": None, "error": None,
+        }
+
+    def _run():
+        def progress_cb(step: str, status: str):
+            with _explore_lock:
+                if job_id in _explore_jobs:
+                    _explore_jobs[job_id]["steps"].append({"key": step, "status": status})
+
+        try:
+            # Resolve to S2-compatible ID from registry if possible
+            explore_id = req.paper_id
+            rec = state.registry.get(req.paper_id)
+            if rec:
+                if rec.arxiv_id:
+                    explore_id = f"ARXIV:{rec.arxiv_id.split('v')[0]}"
+                elif rec.doi:
+                    arxiv_m = _ARXIV_DOI_PATTERN.search(rec.doi)
+                    if arxiv_m:
+                        explore_id = f"ARXIV:{arxiv_m.group(1)}"
+                    else:
+                        explore_id = f"DOI:{rec.doi}"
+                elif rec.s2_id:
+                    explore_id = rec.s2_id
+
+            result = explore_paper_graph(
+                state.llm, explore_id, req.title, req.abstract,
+                semantic_scholar_api_key=state.settings.semantic_scholar_api_key or None,
+                progress_cb=progress_cb,
+            )
+            papers = result.get("papers", [])
+            registered = state.registry.register_from_search(papers)
+            if registered > 0:
+                state.registry.save()
+            result["registry"] = {"newly_registered": registered}
+
+            with _explore_lock:
+                _explore_jobs[job_id]["state"] = "completed"
+                _explore_jobs[job_id]["result"] = result
+        except Exception as e:
+            with _explore_lock:
+                _explore_jobs[job_id]["state"] = "failed"
+                _explore_jobs[job_id]["error"] = str(e)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@router.get("/explore-graph/{job_id}/status")
+def explore_graph_status(job_id: str) -> dict:
+    with _explore_lock:
+        job = _explore_jobs.get(job_id)
+    if not job:
+        return {"error": "Job not found"}
+    return {"state": job["state"], "error": job.get("error")}
+
+
+@router.get("/explore-graph/{job_id}/result")
+def explore_graph_result(job_id: str) -> dict:
+    with _explore_lock:
+        job = _explore_jobs.get(job_id)
+    if not job:
+        return {"error": "Job not found"}
+    if job["result"] is None:
+        return {"ready": False, "state": job["state"]}
+    return {"ready": True, "state": job["state"], "result": job["result"]}
+
+
+_ARXIV_DOI_PATTERN = re.compile(r"10\.48550/arXiv\.(\d{4}\.\d{4,5})", re.IGNORECASE)
+
+
+def _resolve_arxiv_id(rec) -> str:
+    """Extract arXiv ID from record's arxiv_id field or arXiv-style DOI."""
+    if rec.arxiv_id:
+        return rec.arxiv_id.split("v")[0]
+    if rec.doi:
+        m = _ARXIV_DOI_PATTERN.search(rec.doi)
+        if m:
+            return m.group(1)
+    return ""
+
+
+@router.get("/proxy-pdf/{arxiv_id}")
+def proxy_arxiv_pdf(arxiv_id: str):
+    """Fetch an arXiv PDF server-side and stream it to the browser."""
+    url = f"https://arxiv.org/pdf/{arxiv_id}"
+    try:
+        resp = requests.get(url, timeout=30, stream=True, headers={
+            "User-Agent": "Loom/1.0 (research tool; mailto:contact@loom.dev)"
+        })
+        resp.raise_for_status()
+        return Response(
+            content=resp.content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{arxiv_id}.pdf"'},
+        )
+    except Exception:
+        return Response(content=b"Failed to fetch PDF", status_code=502)
+
+
 @router.get("/{paper_id:path}/content")
 def paper_content(paper_id: str) -> dict:
     """Return the best available content for a paper (PDF URL or vault markdown)."""
@@ -321,11 +451,13 @@ def paper_content(paper_id: str) -> dict:
     if not rec:
         return {"error": "Paper not found in registry"}
 
-    if rec.arxiv_id:
-        aid = rec.arxiv_id.split("v")[0]
+    arxiv_id = _resolve_arxiv_id(rec)
+
+    if arxiv_id:
         return {
             "content_type": "pdf_url",
-            "url": f"https://arxiv.org/pdf/{aid}",
+            "url": f"/papers/proxy-pdf/{arxiv_id}",
+            "pdf_url": f"https://arxiv.org/abs/{arxiv_id}",
             "title": rec.title,
         }
 
@@ -333,6 +465,7 @@ def paper_content(paper_id: str) -> dict:
         return {
             "content_type": "pdf_url",
             "url": f"https://doi.org/{rec.doi}",
+            "pdf_url": f"https://doi.org/{rec.doi}",
             "title": rec.title,
         }
 

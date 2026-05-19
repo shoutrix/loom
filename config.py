@@ -75,11 +75,13 @@ class Neo4jSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
+    storage_root_dir: Path = Path(".")
     vault_dir: Path = Path("vault")
     data_dir: Path = Path("data")
     wal_path: Path = Path("data/wal.jsonl")
     snapshot_path: Path = Path("data/snapshot.json")
     semantic_scholar_api_key: str = ""
+    serper_api_key: str = Field("", alias="SERPER_API_KEY")
     active_workspace: str = "default"
 
     llm: LLMSettings = Field(default_factory=LLMSettings)
@@ -90,7 +92,21 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "LOOM_", "extra": "ignore", "env_file": str(_ENV_FILE), "env_file_encoding": "utf-8"}
 
+    def resolve_storage_paths(self) -> None:
+        root = self.storage_root_dir.expanduser()
+        self.storage_root_dir = root
+
+        if not self.vault_dir.is_absolute():
+            self.vault_dir = root / self.vault_dir
+        if not self.data_dir.is_absolute():
+            self.data_dir = root / self.data_dir
+        if not self.wal_path.is_absolute():
+            self.wal_path = root / self.wal_path
+        if not self.snapshot_path.is_absolute():
+            self.snapshot_path = root / self.snapshot_path
+
     def ensure_dirs(self) -> None:
+        self.storage_root_dir.mkdir(parents=True, exist_ok=True)
         self.vault_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,5 +126,6 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     settings = Settings()
+    settings.resolve_storage_paths()
     settings.ensure_dirs()
     return settings

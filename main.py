@@ -153,7 +153,14 @@ class WorkspaceManager:
     @property
     def llm(self) -> LLMProvider:
         if self._llm is None:
-            self._llm = LLMProvider(self.base_settings.llm, self.base_settings.rate_limit)
+            self._llm = LLMProvider(
+                self.base_settings.llm,
+                self.base_settings.rate_limit,
+                storage_root_dir=self.base_settings.storage_root_dir,
+                workspace_id=self._active_workspace,
+            )
+        else:
+            self._llm.set_workspace_context(self._active_workspace)
         return self._llm
 
     @property
@@ -189,6 +196,7 @@ class WorkspaceManager:
 
         state = self.load_workspace(workspace_id)
         self._active_workspace = workspace_id
+        self.llm.set_workspace_context(workspace_id)
         return state
 
     def list_workspaces(self) -> list[dict[str, Any]]:

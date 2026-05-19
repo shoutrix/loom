@@ -37,12 +37,17 @@ interface SearchStep {
 }
 
 const DEFAULT_STEPS: SearchStep[] = [
+  { key: 'scholar_scout', label: 'Scouting Google Scholar', status: 'pending' },
+  { key: 'discovery_read', label: 'Analyzing discoveries', status: 'pending' },
+  { key: 'academic_retrieve', label: 'Searching academic sources', status: 'pending' },
   { key: 'plan', label: 'Planning search', status: 'pending' },
   { key: 'retrieve', label: 'Searching sources', status: 'pending' },
   { key: 'dedup', label: 'Removing duplicates', status: 'pending' },
   { key: 'llm_relevance', label: 'Scoring relevance', status: 'pending' },
+  { key: 'rerank', label: 'Re-ranking candidates', status: 'pending' },
   { key: 'multi_hop', label: 'Exploring citations', status: 'pending' },
   { key: 'deep_rank', label: 'Ranking by influence', status: 'pending' },
+  { key: 'diversity', label: 'Selecting diverse results', status: 'pending' },
   { key: 'root_discovery', label: 'Finding foundational papers', status: 'pending' },
   { key: 'complete', label: 'Finalizing results', status: 'pending' },
 ]

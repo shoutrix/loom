@@ -1,5 +1,5 @@
 """
-Paper retrieval sources: arXiv, Semantic Scholar, OpenAlex.
+Paper retrieval sources: arXiv, Semantic Scholar, OpenAlex, Google Scholar (via Serper).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 from typing import Any
 
+import json as _json
 import requests
 
 from loom.tools.paper_search.types import Paper
@@ -441,6 +442,36 @@ def _openalex_abstract(inv_index: dict[str, list[int]]) -> str:
     return " ".join(token for _, token in parts)
 
 
+_ARXIV_DOI_RE = re.compile(r"10\.48550/arXiv\.(\d{4}\.\d{4,5})", re.IGNORECASE)
+
+
+def _openalex_extract_arxiv_id(item: dict, doi: str, landing_url: str) -> str:
+    """Try to extract an arXiv ID from an OpenAlex work via DOI, locations, or IDs."""
+    # 1. arXiv DOI (e.g. 10.48550/arXiv.2409.12117)
+    m = _ARXIV_DOI_RE.search(doi)
+    if m:
+        return m.group(1)
+    # 2. Landing page URL (e.g. https://arxiv.org/abs/2409.12117)
+    if "arxiv.org" in landing_url:
+        parts = landing_url.split("/abs/")
+        if len(parts) == 2:
+            return parts[1].split("v")[0].strip()
+    # 3. Check all locations for arXiv URLs
+    for loc in (item.get("locations") or []):
+        if not isinstance(loc, dict):
+            continue
+        for key in ("landing_page_url", "pdf_url"):
+            url = str(loc.get(key, "") or "")
+            if "arxiv.org" in url:
+                parts = url.split("/abs/")
+                if len(parts) == 2:
+                    return parts[1].split("v")[0].strip()
+                parts = url.split("/pdf/")
+                if len(parts) == 2:
+                    return parts[1].split("v")[0].strip().rstrip(".pdf")
+    return ""
+
+
 class OpenAlexClient(RetryClient):
     def search(self, query: str, *, limit: int = 30, search_angle: str = "") -> list[Paper]:
         log.info("[OpenAlex] Searching: '%s' (limit=%d, angle='%s')", query[:80], limit, search_angle)
@@ -464,19 +495,174 @@ class OpenAlexClient(RetryClient):
             cc = item.get("cited_by_count")
             venue = ""
             loc = item.get("primary_location")
+            landing_url = ""
             if isinstance(loc, dict):
                 src_obj = loc.get("source")
                 if isinstance(src_obj, dict):
                     venue = str(src_obj.get("display_name", "") or "")
+                landing_url = str(loc.get("landing_page_url", "") or "")
+
+            arxiv_id = _openalex_extract_arxiv_id(item, doi, landing_url)
+
             out.append(_paper_record(
                 pid=f"openalex:{pid or hash(str(item.get('display_name', '')))}",
                 title=str(item.get("display_name", "") or ""),
                 abstract=abstract[:900], source="openalex",
-                url=str(loc.get("landing_page_url", "") or "") if isinstance(loc, dict) else "",
-                doi=doi,
+                url=landing_url,
+                doi=doi, arxiv_id=arxiv_id,
                 year=item.get("publication_year") if isinstance(item.get("publication_year"), int) else None,
                 citation_count=cc if isinstance(cc, int) else 0,
                 venue=venue, search_angle=search_angle,
             ))
         log.info("[OpenAlex] Found %d papers in %.2fs for '%s'", len(out), time.time() - t0, query[:60])
+        return out
+
+
+# ── Google Scholar via Serper ─────────────────────────────────────────
+
+SERPER_SCHOLAR_URL = "https://google.serper.dev/scholar"
+SERPER_WEB_URL = "https://google.serper.dev/search"
+
+_ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})")
+_DOI_URL_RE = re.compile(r"doi\.org/(10\.\d{4,9}/[^\s]+)")
+
+
+def _extract_arxiv_id_from_url(url: str) -> str:
+    m = _ARXIV_URL_RE.search(url)
+    return m.group(1) if m else ""
+
+
+def _extract_doi_from_url(url: str) -> str:
+    m = _DOI_URL_RE.search(url)
+    return m.group(1) if m else ""
+
+
+def _parse_year_from_summary(summary: str) -> int | None:
+    """Try to pull a 4-digit year from the publication_info summary."""
+    m = re.search(r"\b(19|20)\d{2}\b", summary)
+    if m:
+        return int(m.group(0))
+    return None
+
+
+class SerperScholarClient:
+    """Google Scholar search via the Serper /scholar endpoint.
+
+    Only instantiated when SERPER_API_KEY is available.
+    """
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.session = requests.Session()
+        log.info("[Serper] Initialized Google Scholar client")
+
+    def search(self, query: str, *, num: int = 20, search_angle: str = "") -> list[Paper]:
+        log.info("[Serper] Scholar search: '%s' (num=%d, angle='%s')", query[:80], num, search_angle)
+        t0 = time.time()
+        headers = {
+            "X-API-KEY": self.api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {"q": query, "num": min(num, 40)}
+        try:
+            resp = self.session.post(SERPER_SCHOLAR_URL, headers=headers,
+                                     data=_json.dumps(payload), timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            log.warning("[Serper] Scholar search failed: %s", e)
+            return []
+
+        organic = data.get("organic", [])
+        if not isinstance(organic, list):
+            log.warning("[Serper] Unexpected response format")
+            return []
+
+        out: list[Paper] = []
+        for idx, item in enumerate(organic):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+
+            link = str(item.get("link", ""))
+            snippet = str(item.get("snippet", ""))
+            arxiv_id = _extract_arxiv_id_from_url(link)
+            doi = _extract_doi_from_url(link)
+
+            # Also check pdfUrl for arXiv links
+            pdf_url = str(item.get("pdfUrl", ""))
+            if not arxiv_id and pdf_url:
+                arxiv_id = _extract_arxiv_id_from_url(pdf_url)
+
+            # Serper uses camelCase "publicationInfo"
+            pub_info = item.get("publicationInfo", "") or item.get("publication_info", "")
+            pub_str = str(pub_info) if pub_info else ""
+
+            authors: list[dict[str, str]] = []
+            if pub_str:
+                # Format: "A Author, B Author - Journal, Year - Publisher"
+                author_part = pub_str.split(" - ")[0] if " - " in pub_str else ""
+                for name in author_part.split(", "):
+                    name = name.strip()
+                    if name and len(name) > 1:
+                        authors.append({"authorId": "", "name": name})
+
+            # Top-level citedBy and year
+            cited_by_val = item.get("citedBy", 0)
+            citation_count = int(cited_by_val) if isinstance(cited_by_val, (int, float)) else 0
+
+            year_val = item.get("year")
+            year: int | None = int(year_val) if isinstance(year_val, (int, float)) else None
+            if year is not None and not (1900 <= year <= 2100):
+                year = None
+            if year is None:
+                year = _parse_year_from_summary(pub_str)
+
+            pid = f"serper:{arxiv_id or doi or hash(title)}"
+            out.append(_paper_record(
+                pid=pid,
+                title=title,
+                abstract=snippet[:900],
+                source="google_scholar",
+                url=link,
+                doi=doi,
+                arxiv_id=arxiv_id,
+                year=year,
+                citation_count=citation_count,
+                venue="",
+                search_angle=search_angle,
+                authors=authors,
+            ))
+
+        log.info("[Serper] Found %d papers in %.2fs for '%s'", len(out), time.time() - t0, query[:60])
+        return out
+
+    def web_search(self, query: str, *, num: int = 10) -> list[dict[str, str]]:
+        """Regular Google web search. Returns lightweight dicts (title + snippet + link) for vocabulary discovery."""
+        log.info("[Serper] Web search: '%s' (num=%d)", query[:80], num)
+        t0 = time.time()
+        headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
+        payload = {"q": query, "num": min(num, 20)}
+        try:
+            resp = self.session.post(SERPER_WEB_URL, headers=headers,
+                                     data=_json.dumps(payload), timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            log.warning("[Serper] Web search failed: %s", e)
+            return []
+
+        out: list[dict[str, str]] = []
+        for item in data.get("organic", []):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            snippet = str(item.get("snippet", "")).strip()
+            link = str(item.get("link", "")).strip()
+            if title and snippet:
+                out.append({"title": title, "snippet": snippet, "link": link})
+
+        log.info("[Serper] Web search returned %d results in %.2fs", len(out), time.time() - t0)
         return out

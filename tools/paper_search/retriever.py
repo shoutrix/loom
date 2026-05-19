@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 from loom.tools.paper_search.sources import (
     ArxivClient,
@@ -26,12 +27,7 @@ class RetrievalDispatcher:
         self.max_workers = max_workers
 
     def retrieve(self, plan: SearchPlan, raw_query: str) -> list[Paper]:
-        """Dispatch per-API queries from the plan + a raw-query pass.
-
-        Each SearchQuery in the plan has dedicated query strings for each API.
-        The raw user query is always sent as an additional pass to S2 and
-        OpenAlex for direct-hit coverage.
-        """
+        """Dispatch per-API queries from a SearchPlan + a raw-query pass."""
         tasks: list[tuple[str, str, str, int]] = []
 
         for sq in plan.queries:
@@ -42,10 +38,36 @@ class RetrievalDispatcher:
             if sq.openalex:
                 tasks.append(("openalex", sq.openalex, sq.label, OPENALEX_RESULTS_PER_QUERY))
 
-        # Always send the raw user query to S2 and OpenAlex
         tasks.append(("s2", raw_query, "direct_query", S2_RESULTS_PER_QUERY))
         tasks.append(("openalex", raw_query, "direct_query", OPENALEX_RESULTS_PER_QUERY))
 
+        return self._dispatch(tasks)
+
+    def retrieve_from_angles(self, angles: list[dict[str, Any]], raw_query: str) -> list[Paper]:
+        """Dispatch per-API queries from pre-built angle dicts (discovery read output).
+
+        Each angle dict has keys: label, semantic_scholar, arxiv, openalex.
+        """
+        tasks: list[tuple[str, str, str, int]] = []
+
+        for angle in angles:
+            label = str(angle.get("label", ""))
+            s2 = str(angle.get("semantic_scholar", "")).strip()
+            arxiv = str(angle.get("arxiv", "")).strip()
+            openalex = str(angle.get("openalex", "")).strip()
+            if s2:
+                tasks.append(("s2", s2, label, S2_RESULTS_PER_QUERY))
+            if arxiv:
+                tasks.append(("arxiv", arxiv, label, ARXIV_RESULTS_PER_QUERY))
+            if openalex:
+                tasks.append(("openalex", openalex, label, OPENALEX_RESULTS_PER_QUERY))
+
+        tasks.append(("s2", raw_query, "direct_query", S2_RESULTS_PER_QUERY))
+        tasks.append(("openalex", raw_query, "direct_query", OPENALEX_RESULTS_PER_QUERY))
+
+        return self._dispatch(tasks)
+
+    def _dispatch(self, tasks: list[tuple[str, str, str, int]]) -> list[Paper]:
         papers: list[Paper] = []
 
         def _run_search(source: str, query: str, angle: str, limit: int) -> list[Paper]:

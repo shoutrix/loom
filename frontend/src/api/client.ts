@@ -55,6 +55,15 @@ export const api = {
 
   queueStatus: () => get('/papers/queue/status'),
 
+  exploreGraph: (paperId: string, title: string, abstract: string) =>
+    post('/papers/explore-graph/start', { paper_id: paperId, title, abstract }),
+
+  exploreGraphStatus: (jobId: string) =>
+    get(`/papers/explore-graph/${encodeURIComponent(jobId)}/status`),
+
+  exploreGraphResult: (jobId: string) =>
+    get(`/papers/explore-graph/${encodeURIComponent(jobId)}/result`),
+
   registry: () => get('/papers/registry'),
 
   chat: (message: string) => post('/chat', { message }),
