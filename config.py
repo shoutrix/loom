@@ -16,11 +16,26 @@ _ENV_FILE = Path(__file__).parent / ".env"
 
 
 class LLMSettings(BaseSettings):
+    # Provider selection (set LOOM_LLM_PROVIDER / LOOM_LLM_EMBEDDING_PROVIDER).
+    provider: str = "gemini"           # "gemini" | "openrouter" | "mcp_sampling"
+    embedding_provider: str = "gemini"  # "gemini" (only impl today)
+
+    # Gemini settings (used when provider == "gemini" or for embeddings).
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
     pro_model: str = "gemini-2.5-pro"
     flash_model: str = "gemini-2.0-flash"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 3072
+
+    # OpenRouter settings (used when provider == "openrouter"; P2 wires them up).
+    openrouter_api_key: str = Field("", alias="OPENROUTER_API_KEY")
+    openrouter_pro_model: str = "anthropic/claude-sonnet-4.5"
+    openrouter_flash_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = ""
+    openrouter_app_title: str = "loom"
+
+    # Shared sampling defaults.
     temperature_pro: float = 0.3
     temperature_flash: float = 0.1
     max_output_tokens_pro: int = 65536
@@ -28,6 +43,9 @@ class LLMSettings(BaseSettings):
     retry_max_attempts: int = 5
     retry_base_delay: float = 2.0
     retry_max_delay: float = 60.0
+
+    # MCP sampling provider knobs.
+    mcp_request_timeout_seconds: float = 600.0
 
     model_config = {"env_prefix": "LOOM_LLM_", "extra": "ignore", "env_file": str(_ENV_FILE), "env_file_encoding": "utf-8"}
 
