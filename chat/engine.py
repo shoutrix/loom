@@ -14,11 +14,11 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from loom.config import Settings
-    from loom.llm.provider import LLMProvider
-    from loom.llm.embeddings import EmbeddingProvider
-    from loom.search.semantic import DualSemanticIndex
-    from loom.search.keyword import KeywordIndex
     from loom.graph.store import GraphStore
+    from loom.llm.base import EmbeddingProvider, LLMProvider
+    from loom.retrieval.base import Retriever
+    from loom.search.keyword import KeywordIndex
+    from loom.search.semantic import DualSemanticIndex
 
 from loom.prompts import CHAT_SYSTEM, CHAT_ANSWER
 
@@ -39,6 +39,7 @@ class ChatResponse:
     graph_context: str
     num_chunks_retrieved: int
     num_propositions_retrieved: int
+    retriever_used: str = ""
 
 
 class ChatEngine:
@@ -52,6 +53,7 @@ class ChatEngine:
         semantic_index: DualSemanticIndex,
         keyword_index: KeywordIndex,
         graph: GraphStore,
+        retriever: "Retriever | None" = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
@@ -59,13 +61,23 @@ class ChatEngine:
         self.semantic_index = semantic_index
         self.keyword_index = keyword_index
         self.graph = graph
+        if retriever is None:
+            # Default to graph-hybrid (current behavior). The factory pattern
+            # lets callers inject FullContext or AdaptiveRetriever in P4.
+            from loom.retrieval.graph_hybrid import GraphHybridRetriever
+            retriever = GraphHybridRetriever(
+                settings=settings.search,
+                embedder=embedder,
+                semantic_index=semantic_index,
+                keyword_index=keyword_index,
+                graph=graph,
+            )
+        self.retriever = retriever
         self.history: list[ChatMessage] = []
         self.max_history = 10
 
     def chat(self, user_message: str) -> ChatResponse:
         """Process a user message and return an answer with sources."""
-        from loom.search.hybrid import hybrid_search
-
         self.history.append(ChatMessage(role="user", content=user_message))
 
         context_query = user_message
@@ -73,17 +85,11 @@ class ChatEngine:
             recent = self.history[-3:]
             context_query = " ".join(m.content for m in recent if m.role == "user")
 
-        results, graph_context = hybrid_search(
-            context_query,
-            self.embedder,
-            self.semantic_index,
-            self.keyword_index,
-            self.graph,
-            self.settings.search,
-        )
-
-        chunks = [r for r in results if not r.is_proposition]
-        props = [r for r in results if r.is_proposition]
+        retrieval = self.retriever.retrieve(context_query, history=self.history)
+        results = retrieval.all_results
+        graph_context = retrieval.graph_context
+        chunks = retrieval.chunks
+        props = retrieval.propositions
 
         context_parts: list[str] = []
 
@@ -139,6 +145,7 @@ class ChatEngine:
             graph_context=graph_context,
             num_chunks_retrieved=len(chunks),
             num_propositions_retrieved=len(props),
+            retriever_used=retrieval.retriever_used,
         )
 
     def clear_history(self) -> None:
