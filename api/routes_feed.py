@@ -15,10 +15,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from loom.config import get_settings
-from loom.feed import centroids as centroids_mod
-from loom.feed import db as feed_db
-from loom.feed import profile as profile_mod
-from loom.feed import storage as feed_storage
+from loom.recommender import centroids as centroids_mod
+from loom.recommender import db as feed_db
+from loom.recommender import profile as profile_mod
+from loom.recommender import storage as feed_storage
 
 router = APIRouter(prefix="/feed", tags=["feed"])
 

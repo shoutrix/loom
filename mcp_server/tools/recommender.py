@@ -1,9 +1,10 @@
 """
-Feed-kind MCP tools: create profiles, fetch more items, rate them, list them.
+Recommender MCP tools: create profiles, fetch more items, rate them, list them.
 
-Feed workspaces are stored under the same data_dir layout as research
-workspaces but with a `kind: 'feed'` marker in `workspace.json` and a
-SQLite db at `<workspace>/feed.db`.
+A recommender attaches to any workspace by adding 'recommender' to its
+capabilities (P6+; previously a separate `kind: 'feed'` workspace).
+Recommender state lives in a SQLite db at `<workspace>/feed.db` (filename
+preserved across the kind-removal migration).
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         default_window: str = "1w",
     ) -> dict[str, Any]:
         """
-        Create or update a feed-kind workspace.
+        Create or update a recommender-enabled workspace.
 
         Args:
             workspace_id: id (alphanumeric/hyphens/underscores)
@@ -51,7 +52,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
             kinds: subset of ['paper', 'blog']; defaults to both
             default_window: default time window for `feed_more` if caller omits one
 
-        Writes `workspace.json` with `kind: 'feed'` and creates `feed.db`.
+        Adds 'recommender' to the workspace's capabilities and creates
+        feed.db on first call (idempotent).
         """
         if (err := enforce(workspace_id, write=True)) is not None:
             return err
@@ -112,7 +114,7 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Surface N more relevant items in a feed workspace.
 
         Args:
-            workspace_id: feed-kind workspace
+            workspace_id: recommender-enabled workspace
             n: number of items to surface (default 10)
             window: time window string. One of:
                 'all', 'since-last-run', '<n>d' (days), '<n>w' (weeks),
@@ -176,7 +178,7 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         db_path = feed_db.db_path_for(ws_settings.data_dir)
 
         if not db_path.exists():
-            return {"ok": False, "error": "feed.db not found; rate works only on feed-kind workspaces"}
+            return {"ok": False, "error": "feed.db not found; rate works only on recommender-enabled workspaces"}
 
         item = feed_storage.get_item(db_path, item_id)
         if item is None or item.workspace_id != workspace_id:

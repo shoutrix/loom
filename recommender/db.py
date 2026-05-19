@@ -1,5 +1,5 @@
 """
-SQLite schema + connection helpers for feed-kind workspaces.
+SQLite schema + connection helpers for recommender-enabled workspaces.
 
 One database per feed workspace at `<workspace_data_dir>/feed.db`. Holds the
 profile, items, runs, ratings, and an embedding cache. Schema is created on

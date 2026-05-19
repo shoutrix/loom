@@ -1,4 +1,4 @@
-"""Dataclasses for feed-kind entities. Lightweight transport layer over SQLite rows."""
+"""Dataclasses for recommender entities. Lightweight transport over SQLite rows."""
 
 from __future__ import annotations
 
