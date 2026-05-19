@@ -9,7 +9,7 @@ from typing import Any
 
 import feedparser
 
-from loom.feed.models import Candidate
+from loom.recommender.models import Candidate
 
 log = logging.getLogger(__name__)
 

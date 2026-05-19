@@ -35,7 +35,7 @@ def register(mcp: FastMCP, state: MCPState) -> None:
                 "workspace_id": w.workspace_id,
                 "display_name": w.display_name,
                 "description": w.description,
-                "kind": w.kind,
+                "capabilities": w.capabilities,
                 "created_at": w.created_at,
                 "stats": w.stats,
             }
@@ -54,7 +54,7 @@ def register(mcp: FastMCP, state: MCPState) -> None:
             "workspace_id": info.workspace_id,
             "display_name": info.display_name,
             "description": info.description,
-            "kind": info.kind,
+            "capabilities": info.capabilities,
             "created_at": info.created_at,
             "stats": info.stats,
             "data_dir": str(info.data_dir),

@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from loom.feed import db, embed_cache, profile as profile_mod
-from loom.feed.pipeline import EMBED_MODEL_NAME
+from loom.recommender import db, embed_cache, profile as profile_mod
+from loom.recommender.pipeline import EMBED_MODEL_NAME
 
 
 POSITIVE_THRESHOLD = 4

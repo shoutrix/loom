@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from loom.feed.models import Candidate
+from loom.recommender.models import Candidate
 
 log = logging.getLogger(__name__)
 

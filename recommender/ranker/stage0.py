@@ -15,7 +15,7 @@ effective weight, in line with the plan's source-quality cap principle).
 
 from __future__ import annotations
 
-from loom.feed.features import FeatureVector
+from loom.recommender.features import FeatureVector
 
 
 def score(fv: FeatureVector) -> float:

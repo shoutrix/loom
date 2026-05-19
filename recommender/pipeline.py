@@ -29,19 +29,39 @@ from typing import Any
 
 import numpy as np
 
-from loom.feed import db, embed_cache, profile as profile_mod, storage
-from loom.feed.features import compute_features
-from loom.feed.models import Candidate, FeedItem, FeedProfile, FeedRun
-from loom.feed.ranker import stage0, stage1, stage2, refit as refit_mod
-from loom.feed.ranker.mmr import mmr_select
-from loom.feed.sources.base import parse_window
-from loom.feed.sources.papers import arxiv as arxiv_src
-from loom.feed.sources.blogs import rss as rss_src
-from loom.feed.sources.blogs import hn as hn_src
+from loom.recommender import db, embed_cache, profile as profile_mod, storage
+from loom.recommender.features import compute_features
+from loom.recommender.models import Candidate, FeedItem, FeedProfile, FeedRun
+from loom.recommender.ranker import stage0, stage1, stage2, refit as refit_mod
+from loom.recommender.ranker.mmr import mmr_select
+from loom.recommender.sources.base import parse_window
+from loom.recommender.sources.papers import arxiv as arxiv_src
+from loom.recommender.sources.blogs import rss as rss_src
+from loom.recommender.sources.blogs import hn as hn_src
 
 log = logging.getLogger(__name__)
 
-EMBED_MODEL_NAME = "gemini-embedding-001"
+
+def _resolve_embed_model_name() -> str:
+    """Read the embedding model id from LLMSettings.
+
+    Lazy import to avoid pulling pydantic-settings at module load time when
+    callers only need the constant in places where the model id doesn't
+    actually matter.
+    """
+    try:
+        from loom.config import get_settings
+        return get_settings().llm.embedding_model
+    except Exception:
+        return "gemini-embedding-001"
+
+
+# Settings-driven default so the recommender's embedding cache invalidates
+# correctly when the user switches LOOM_LLM_EMBEDDING_MODEL. The constant
+# is preserved (P6 didn't replace every call site) but is no longer
+# hardcoded to a specific Gemini model id.
+EMBED_MODEL_NAME = _resolve_embed_model_name()
+
 DEFAULT_PER_QUERY_LIMIT = 25
 DEFAULT_RSS_PER_FEED = 15
 
@@ -163,7 +183,7 @@ def run_more(
         # Stage 0: heuristic; calibrated_prob == score for display; uncertainty unused.
         scored = []
         for i, (item_id, emb, c) in enumerate(bundle):
-            from loom.feed.features import FeatureVector
+            from loom.recommender.features import FeatureVector
             fv = FeatureVector(**{k: feature_dicts[i].get(k, 0.0) for k in FeatureVector().__dict__})
             sc = stage0.score(fv)
             scored.append((item_id, sc, emb, c, feature_dicts[i], sc, 0.0))

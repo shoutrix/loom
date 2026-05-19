@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from loom.feed.ranker.stage1 import FEATURE_ORDER, Stage1Model
+from loom.recommender.ranker.stage1 import FEATURE_ORDER, Stage1Model
 
 
 @dataclass
@@ -59,7 +59,7 @@ def evaluate_new_model(
     if not holdout_features or not holdout_labels:
         return SanityResult(ok=not failures, failures=failures, auc=0.0, notes=notes)
 
-    from loom.feed.ranker.stage1 import predict_proba
+    from loom.recommender.ranker.stage1 import predict_proba
     probs = predict_proba(new_model, holdout_features)
     holdout_auc = auc(np.asarray(probs), np.asarray(holdout_labels))
     notes["holdout_auc"] = holdout_auc

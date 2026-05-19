@@ -8,8 +8,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from loom.feed import db
-from loom.feed.models import FeedItem, FeedRun, FeedRating
+from loom.recommender import db
+from loom.recommender.models import FeedItem, FeedRun, FeedRating
 
 
 def insert_run(db_path: Path, run: FeedRun) -> None:

@@ -24,7 +24,7 @@ class WorkspaceInfo:
     display_name: str
     description: str
     created_at: str
-    kind: str  # 'research' | 'feed' (defaults to 'research' for legacy workspaces)
+    capabilities: list[str]  # e.g. ['recommender'] if feed.db is present
     stats: dict[str, Any]
     data_dir: Path
     vault_dir: Path
@@ -86,12 +86,16 @@ class MCPState:
         if registry is not None:
             stats["papers"] = registry.stats()
 
+        capabilities = list(meta.get("capabilities", []))
+        if "recommender" not in capabilities and (ws_data / "feed.db").exists():
+            capabilities.append("recommender")
+
         return WorkspaceInfo(
             workspace_id=workspace_id,
             display_name=meta.get("display_name", workspace_id),
             description=meta.get("description", ""),
             created_at=meta.get("created_at", ""),
-            kind=meta.get("kind", "research"),
+            capabilities=capabilities,
             stats=stats,
             data_dir=ws_data,
             vault_dir=self.settings.vault_dir / workspace_id,

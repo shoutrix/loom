@@ -24,7 +24,7 @@ try:
 except ImportError:
     _HAS_LIGHTGBM = False
 
-from loom.feed.ranker.stage1 import FEATURE_ORDER, features_to_matrix
+from loom.recommender.ranker.stage1 import FEATURE_ORDER, features_to_matrix
 
 
 _MONOTONIC: dict[str, int] = {

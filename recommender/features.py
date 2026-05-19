@@ -26,8 +26,8 @@ from typing import Any
 
 import numpy as np
 
-from loom.feed import db
-from loom.feed.models import Candidate, FeedProfile
+from loom.recommender import db
+from loom.recommender.models import Candidate, FeedProfile
 
 
 # ---- source quality priors -------------------------------------------------

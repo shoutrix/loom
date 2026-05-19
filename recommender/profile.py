@@ -9,8 +9,8 @@ from typing import Any
 
 import numpy as np
 
-from loom.feed import db
-from loom.feed.models import FeedProfile
+from loom.recommender import db
+from loom.recommender.models import FeedProfile
 
 
 def create_profile(

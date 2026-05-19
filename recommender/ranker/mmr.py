@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from loom.feed.features import cosine
+from loom.recommender.features import cosine
 
 
 def mmr_select(

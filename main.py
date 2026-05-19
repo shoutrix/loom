@@ -272,7 +272,7 @@ class WorkspaceManager:
                 "loaded_in_memory": is_loaded,
                 "created_at": meta.get("created_at", ""),
                 "description": meta.get("description", ""),
-                "kind": meta.get("kind", "research"),
+                "capabilities": list(meta.get("capabilities", [])),
             }
 
             if is_loaded:

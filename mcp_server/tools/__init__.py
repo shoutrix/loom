@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
-from loom.mcp_server.tools import shared, research, ingestion, feed
+from loom.mcp_server.tools import ingestion, recommender, research, shared
 
 
 def register_all(
@@ -18,4 +18,4 @@ def register_all(
     shared.register(mcp, state)
     research.register(mcp, state)
     ingestion.register(mcp, state, loader)
-    feed.register(mcp, state, loader)
+    recommender.register(mcp, state, loader)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from typing import Iterable, Protocol
 
-from loom.feed.models import Candidate
+from loom.recommender.models import Candidate
 
 
 class SourceAdapter(Protocol):

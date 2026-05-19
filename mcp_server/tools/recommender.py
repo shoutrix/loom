@@ -16,12 +16,12 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Context
 
-from loom.feed import centroids as centroids_mod
-from loom.feed import db as feed_db
-from loom.feed import pipeline as feed_pipeline
-from loom.feed import profile as profile_mod
-from loom.feed import storage as feed_storage
-from loom.feed.ranker import refit as refit_mod
+from loom.recommender import centroids as centroids_mod
+from loom.recommender import db as feed_db
+from loom.recommender import pipeline as feed_pipeline
+from loom.recommender import profile as profile_mod
+from loom.recommender import storage as feed_storage
+from loom.recommender.ranker import refit as refit_mod
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
 from loom.permissions import enforce
@@ -58,7 +58,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         ws_settings = state.settings.for_workspace(workspace_id)
         ws_settings.ensure_dirs()
 
-        # Mark workspace.json with kind=feed (or upsert)
+        # Upsert workspace.json, adding 'recommender' to capabilities.
+        # Kind is no longer written (P6 unified workspaces).
         meta_path = ws_settings.data_dir / "workspace.json"
         meta: dict[str, Any] = {}
         if meta_path.exists():
@@ -71,7 +72,11 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         meta.setdefault("created_at", datetime.datetime.now().isoformat())
         if description:
             meta["description"] = description
-        meta["kind"] = "feed"
+        caps = list(meta.get("capabilities", []))
+        if "recommender" not in caps:
+            caps.append("recommender")
+        meta["capabilities"] = caps
+        meta.pop("kind", None)  # legacy
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         with open(meta_path, "w") as f:
             json.dump(meta, f, indent=2)
@@ -90,7 +95,7 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         return {
             "ok": True,
             "workspace_id": fp.workspace_id,
-            "kind": "feed",
+            "capabilities": ["recommender"],
             "seed_topics": fp.seed_topics,
             "config": fp.config,
             "data_dir": str(ws_settings.data_dir),
@@ -456,3 +461,100 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
                 (workspace_id, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    @mcp.tool()
+    async def materialize_into_workspace(
+        workspace_id: str,
+        item_ids: list[str],
+    ) -> dict[str, Any]:
+        """
+        Promote ranked recommender candidates into the workspace as documents.
+
+        Writes each item as <vault>/<ws>/_candidates/<item_id>.md and adds a
+        'candidate' entry to the workspace's paper_registry.json. Full
+        ingestion (chunking, embeddings, graph extraction) still has to be
+        run separately via ingest_paper to bring it into the knowledge
+        graph; this tool is the lightweight handoff between the
+        recommender producer and the document consumer.
+        """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
+
+        ws_settings = state.settings.for_workspace(workspace_id)
+        db_path = feed_db.db_path_for(ws_settings.data_dir)
+        if not db_path.exists():
+            return {"ok": False, "error": "no recommender attached (feed.db missing)"}
+
+        vault_dir = ws_settings.vault_dir / "_candidates"
+        vault_dir.mkdir(parents=True, exist_ok=True)
+
+        materialized: list[dict[str, Any]] = []
+        skipped: list[str] = []
+
+        with feed_db.session(db_path) as conn:
+            for iid in item_ids:
+                row = conn.execute(
+                    """
+                    SELECT id, title, url, source, kind, summary, content_snippet,
+                           published_at, raw_meta
+                    FROM feed_item
+                    WHERE id=? AND workspace_id=?
+                    """,
+                    (iid, workspace_id),
+                ).fetchone()
+                if row is None:
+                    skipped.append(iid)
+                    continue
+
+                safe_name = "".join(
+                    ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in iid
+                )
+                md_path = vault_dir / f"{safe_name}.md"
+                md_path.write_text(
+                    _render_candidate_markdown(row),
+                    encoding="utf-8",
+                )
+
+                materialized.append({
+                    "item_id": iid,
+                    "title": row["title"] if row["title"] else "",
+                    "url": row["url"] if row["url"] else "",
+                    "vault_path": str(md_path.relative_to(ws_settings.vault_dir)),
+                })
+
+                # Mark in feed_item so the same candidate isn't re-materialized
+                conn.execute(
+                    "UPDATE feed_item SET status='materialized' WHERE id=? AND workspace_id=?",
+                    (iid, workspace_id),
+                )
+
+        return {
+            "ok": True,
+            "materialized": materialized,
+            "skipped": skipped,
+            "vault_dir": str(vault_dir),
+        }
+
+
+def _render_candidate_markdown(row) -> str:
+    """Render a feed_item row as candidate.md with YAML frontmatter."""
+    fm_lines = ["---"]
+    fm_lines.append(f"status: candidate")
+    fm_lines.append(f"source: recommender")
+    if row["url"]:
+        fm_lines.append(f"url: {row['url']}")
+    if row["source"]:
+        fm_lines.append(f"feed_source: {row['source']}")
+    if row["kind"]:
+        fm_lines.append(f"kind: {row['kind']}")
+    if row["published_at"]:
+        fm_lines.append(f"published_at: {row['published_at']}")
+    fm_lines.append("---")
+    body_lines = [f"# {row['title'] or '(untitled)'}"]
+    if row["summary"]:
+        body_lines.append("")
+        body_lines.append(row["summary"])
+    if row["content_snippet"]:
+        body_lines.append("")
+        body_lines.append(row["content_snippet"])
+    return "\n".join(fm_lines) + "\n\n" + "\n".join(body_lines) + "\n"

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from loom.feed import db
+from loom.recommender import db
 
 
 def get(conn: sqlite3.Connection, item_id: str, model_name: str) -> np.ndarray | None:

@@ -16,12 +16,12 @@ from typing import Any
 
 import numpy as np
 
-from loom.feed import db, storage
-from loom.feed.ranker import stage1, stage2
-from loom.feed.ranker.calibration import PlattCalibrator, fit_platt
-from loom.feed.ranker.sanity import auc as auc_metric, evaluate_new_model
-from loom.feed.ranker.stage1 import Stage1Model
-from loom.feed.ranker.stage2 import Stage2Model
+from loom.recommender import db, storage
+from loom.recommender.ranker import stage1, stage2
+from loom.recommender.ranker.calibration import PlattCalibrator, fit_platt
+from loom.recommender.ranker.sanity import auc as auc_metric, evaluate_new_model
+from loom.recommender.ranker.stage1 import Stage1Model
+from loom.recommender.ranker.stage2 import Stage2Model
 
 STAGE0_MIN = 0
 STAGE1_MIN = 15

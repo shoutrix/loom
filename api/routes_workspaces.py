@@ -33,20 +33,22 @@ async def get_active_workspace() -> dict:
     mgr = get_workspace_manager()
     state = mgr.active
     display_name = mgr.active_workspace_id
-    kind = "research"
+    capabilities: list[str] = []
     meta_path = state.settings.data_dir / "workspace.json"
     if meta_path.exists():
         try:
             with open(meta_path) as f:
                 meta = json.load(f)
             display_name = meta.get("display_name", mgr.active_workspace_id)
-            kind = meta.get("kind", "research")
+            capabilities = list(meta.get("capabilities", []))
         except Exception:
             pass
+    if "recommender" not in capabilities and (state.settings.data_dir / "feed.db").exists():
+        capabilities.append("recommender")
     return {
         "workspace_id": mgr.active_workspace_id,
         "display_name": display_name,
-        "kind": kind,
+        "capabilities": capabilities,
         "graph": state.graph.stats(),
         "indexes": state.semantic_index.stats,
         "vault_files": len(state.vault.list_files()),
