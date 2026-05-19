@@ -13,7 +13,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP, Context
 
 from loom.config import get_settings
-from loom.mcp_server.sampling import MCPReasoningProvider
+from loom.llm.mcp_sampling import MCPSamplingLLMProvider as MCPReasoningProvider
 from loom.mcp_server.state import MCPState
 
 

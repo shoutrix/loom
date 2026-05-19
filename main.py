@@ -24,8 +24,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from loom.config import Settings, get_settings
-from loom.llm.provider import LLMProvider
-from loom.llm.embeddings import EmbeddingProvider
+from loom.llm import make_embedding_provider, make_llm_provider
+from loom.llm.base import EmbeddingProvider, LLMProvider
 from loom.graph.store import GraphStore
 from loom.search.semantic import DualSemanticIndex
 from loom.search.keyword import KeywordIndex
@@ -153,10 +153,8 @@ class WorkspaceManager:
     @property
     def llm(self) -> LLMProvider:
         if self._llm is None:
-            self._llm = LLMProvider(
-                self.base_settings.llm,
-                self.base_settings.rate_limit,
-                storage_root_dir=self.base_settings.storage_root_dir,
+            self._llm = make_llm_provider(
+                self.base_settings,
                 workspace_id=self._active_workspace,
             )
         else:
@@ -166,7 +164,7 @@ class WorkspaceManager:
     @property
     def embedder(self) -> EmbeddingProvider:
         if self._embedder is None:
-            self._embedder = EmbeddingProvider(self.base_settings.llm)
+            self._embedder = make_embedding_provider(self.base_settings)
         return self._embedder
 
     @property
