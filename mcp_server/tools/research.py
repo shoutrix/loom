@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from loom.config import get_settings
 from loom.llm.mcp_sampling import MCPSamplingLLMProvider as MCPReasoningProvider
 from loom.mcp_server.state import MCPState
+from loom.permissions import enforce
 
 
 def register(mcp: FastMCP, state: MCPState) -> None:
@@ -68,6 +69,11 @@ def register(mcp: FastMCP, state: MCPState) -> None:
 
         Returns a dict with `papers`, `root_papers`, `plan`, and `stats`.
         """
+        if workspace_id:
+            # Side-effect: results may be registered in the workspace's paper
+            # registry, so a write check is appropriate when targeted.
+            if (err := enforce(workspace_id, write=True)) is not None:
+                return err
         settings = get_settings()
         loop = asyncio.get_running_loop()
         llm = MCPReasoningProvider(ctx, loop=loop)

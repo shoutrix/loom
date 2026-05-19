@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     storage_root_dir: Path = Path(".")
     vault_dir: Path = Path("vault")
     data_dir: Path = Path("data")
+    subscribers_path: Path = Path("subscribers.yaml")
     wal_path: Path = Path("data/wal.jsonl")
     snapshot_path: Path = Path("data/snapshot.json")
     semantic_scholar_api_key: str = ""
@@ -129,6 +130,8 @@ class Settings(BaseSettings):
             self.vault_dir = root / self.vault_dir
         if not self.data_dir.is_absolute():
             self.data_dir = root / self.data_dir
+        if not self.subscribers_path.is_absolute():
+            self.subscribers_path = root / self.subscribers_path
         if not self.wal_path.is_absolute():
             self.wal_path = root / self.wal_path
         if not self.snapshot_path.is_absolute():

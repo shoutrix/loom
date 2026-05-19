@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from loom.llm.mcp_sampling import MCPSamplingLLMProvider as MCPReasoningProvider
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
+from loom.permissions import enforce
 
 
 def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
@@ -38,6 +39,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Runs in the foreground (~30 LLM round-trips per paper). Updates the
         workspace's graph + indexes + paper registry on completion.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         loop = asyncio.get_running_loop()
         llm = MCPReasoningProvider(ctx, loop=loop)
         pipeline = loader.make_pipeline(workspace_id, llm)
@@ -97,6 +100,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
 
         Foreground only -- expect a multi-minute Claude session per ~5 papers.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         loop = asyncio.get_running_loop()
         llm = MCPReasoningProvider(ctx, loop=loop)
         pipeline = loader.make_pipeline(workspace_id, llm)
@@ -151,6 +156,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Uses loom's hybrid search (semantic + BM25 + graph) to retrieve context,
         then the calling LLM (Claude) composes the answer via MCP sampling.
         """
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
         loop = asyncio.get_running_loop()
         llm = MCPReasoningProvider(ctx, loop=loop)
         engine = loader.make_chat_engine(workspace_id, llm)

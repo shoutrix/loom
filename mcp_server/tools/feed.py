@@ -24,6 +24,7 @@ from loom.feed import storage as feed_storage
 from loom.feed.ranker import refit as refit_mod
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
+from loom.permissions import enforce
 
 
 def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
@@ -52,6 +53,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
 
         Writes `workspace.json` with `kind: 'feed'` and creates `feed.db`.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         ws_settings = state.settings.for_workspace(workspace_id)
         ws_settings.ensure_dirs()
 
@@ -114,6 +117,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Returns the run summary + ranked list of items with their feature
         breakdown. Items are persisted to the workspace's feed.db.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         ws_settings = state.settings.for_workspace(workspace_id)
         db_path = feed_db.db_path_for(ws_settings.data_dir)
 
@@ -157,6 +162,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         rating == 3 leaves the status as 'read'. The persisted rating feeds
         future ranker stages (Phase 4+).
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         if rating < 1 or rating > 5:
             return {"ok": False, "error": "rating must be 1..5"}
 
@@ -197,6 +204,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Returns the refit summary including held-out AUC, coefficients, and
         whether the new model was deployed or rolled back.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         ws_settings = state.settings.for_workspace(workspace_id)
         db_path = feed_db.db_path_for(ws_settings.data_dir)
         if not db_path.exists():
@@ -369,6 +378,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         Typically Claude calls this after `propose_description_refresh` and
         composing a fresh description from the surfaced positives/negatives.
         """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
         ws_settings = state.settings.for_workspace(workspace_id)
         db_path = feed_db.db_path_for(ws_settings.data_dir)
         if not db_path.exists():

@@ -14,6 +14,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from loom.mcp_server.state import MCPState
+from loom.permissions import active_subscriber, enforce
 
 
 def register(mcp: FastMCP, state: MCPState) -> None:
@@ -21,7 +22,14 @@ def register(mcp: FastMCP, state: MCPState) -> None:
 
     @mcp.tool()
     def list_workspaces() -> list[dict[str, Any]]:
-        """List all loom workspaces on disk with their kind, description, and stats."""
+        """List loom workspaces accessible to the current subscriber."""
+        sid, registry = active_subscriber()
+        all_workspaces = state.list_workspaces()
+        if registry is not None and sid:
+            allowed = set(registry.list_workspaces_for(
+                sid, [w.workspace_id for w in all_workspaces]
+            ))
+            all_workspaces = [w for w in all_workspaces if w.workspace_id in allowed]
         return [
             {
                 "workspace_id": w.workspace_id,
@@ -31,12 +39,14 @@ def register(mcp: FastMCP, state: MCPState) -> None:
                 "created_at": w.created_at,
                 "stats": w.stats,
             }
-            for w in state.list_workspaces()
+            for w in all_workspaces
         ]
 
     @mcp.tool()
     def get_workspace(workspace_id: str) -> dict[str, Any] | None:
         """Get full metadata + stats for one workspace by id."""
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
         info = state.get_workspace(workspace_id)
         if info is None:
             return None
@@ -65,12 +75,16 @@ def register(mcp: FastMCP, state: MCPState) -> None:
             status: optional filter -- 'shortlisted' | 'queued' | 'ingesting' | 'ingested' | 'failed'
             limit: max records (default 50)
         """
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
         records = state.list_papers(workspace_id, status=status, limit=limit)
         return [asdict(r) for r in records]
 
     @mcp.tool()
     def get_paper(workspace_id: str, paper_id: str) -> dict[str, Any] | None:
         """Get a single paper record by id from a workspace's registry."""
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
         rec = state.get_paper(workspace_id, paper_id)
         if rec is None:
             return None
@@ -79,11 +93,15 @@ def register(mcp: FastMCP, state: MCPState) -> None:
     @mcp.tool()
     def list_vault_files(workspace_id: str) -> list[str]:
         """List all markdown files under a workspace's vault."""
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err  # type: ignore[return-value]
         return state.list_vault_files(workspace_id)
 
     @mcp.tool()
     def read_vault_file(workspace_id: str, relative_path: str) -> str | None:
         """Read the contents of a markdown file in a workspace's vault."""
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err  # type: ignore[return-value]
         return state.read_vault_file(workspace_id, relative_path)
 
     @mcp.tool()
