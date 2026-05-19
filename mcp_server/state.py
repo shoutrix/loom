@@ -150,3 +150,52 @@ class MCPState:
         if not target.exists() or not target.is_file():
             return None
         return target.read_text(encoding="utf-8", errors="replace")
+
+    def write_vault_note(
+        self,
+        workspace_id: str,
+        title: str,
+        content: str,
+        subfolder: str = "notes",
+    ) -> dict[str, Any]:
+        """Create a markdown note with auto-slugged filename and frontmatter.
+
+        Writes to <vault>/<workspace>/<subfolder>/<yyyymmdd>_<slug>.md.
+        """
+        from loom.storage.vault import VaultManager
+
+        vault = VaultManager(self.settings.vault_dir / workspace_id)
+        vf = vault.create_note(title=title, content=content, subfolder=subfolder)
+        return {
+            "relative_path": vf.relative_path,
+            "title": vf.title,
+            "size_bytes": vf.size_bytes,
+        }
+
+    def write_vault_file(
+        self,
+        workspace_id: str,
+        relative_path: str,
+        content: str,
+    ) -> dict[str, Any] | None:
+        """Write a markdown file at an explicit path within the workspace vault.
+
+        Refuses paths that escape the workspace vault (path-traversal guard).
+        """
+        from loom.storage.vault import VaultManager
+
+        vault_root = self.settings.vault_dir / workspace_id
+        # Path-traversal guard identical in shape to read_vault_file.
+        candidate = (vault_root / relative_path).resolve()
+        try:
+            candidate.relative_to(vault_root.resolve())
+        except ValueError:
+            return None
+
+        vault = VaultManager(vault_root)
+        vf = vault.write_file(relative_path, content)
+        return {
+            "relative_path": vf.relative_path,
+            "title": vf.title,
+            "size_bytes": vf.size_bytes,
+        }

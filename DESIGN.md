@@ -500,7 +500,10 @@ Listed in rough priority order.
 
 1. **HTTP route for materialize.** The UI button currently copies an
    MCP command to the clipboard; a direct `/feed/materialize` route
-   would close the loop without a clipboard handoff.
+   would close the loop without a clipboard handoff. (Note: vault-
+   write MCP tools — `write_vault_note`, `write_vault_file` — shipped
+   separately, closing the "agent composes synthesis and deposits it"
+   gap that was previously listed here.)
 2. **Embedding provider abstraction completion.** Gemini is the only
    embedder today. Adding Voyage and Cohere with a `(model, dim)`
    composite cache key (rather than just `model_name`) defends

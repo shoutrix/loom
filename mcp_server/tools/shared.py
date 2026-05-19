@@ -105,6 +105,70 @@ def register(mcp: FastMCP, state: MCPState) -> None:
         return state.read_vault_file(workspace_id, relative_path)
 
     @mcp.tool()
+    def write_vault_note(
+        workspace_id: str,
+        title: str,
+        content: str,
+        subfolder: str = "notes",
+    ) -> dict[str, Any]:
+        """
+        Create a markdown note in a workspace's vault.
+
+        Use this when composing a synthesis, summary, or freshly-written
+        document that should land in the knowledge base alongside ingested
+        papers. Filename is auto-generated as
+        <vault>/<workspace>/<subfolder>/<yyyymmdd>_<slug>.md. Title and
+        creation time are written into YAML frontmatter.
+
+        For depositing existing web sources (URLs, arXiv ids, DOIs) prefer
+        `ingest_paper`, which runs the full chunk/enrich/graph pipeline.
+        This tool is for short-circuit notes the agent writes itself.
+
+        Args:
+            workspace_id: target workspace (must be writable for this subscriber)
+            title: human-readable note title (used for slug + frontmatter)
+            content: markdown body of the note (frontmatter is prepended)
+            subfolder: vault subdir (default 'notes')
+        """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
+        return state.write_vault_note(workspace_id, title, content, subfolder)
+
+    @mcp.tool()
+    def write_vault_file(
+        workspace_id: str,
+        relative_path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        """
+        Write a markdown file at an explicit path inside a workspace's vault.
+
+        Lower-level than `write_vault_note` — does not slugify or add
+        frontmatter, just writes the bytes. Useful when the agent wants
+        precise control over the filename (e.g. overwriting a known path
+        or writing structured nested folders).
+
+        Refuses paths that escape the workspace vault (no '../' tricks).
+
+        Args:
+            workspace_id: target workspace (must be writable for this subscriber)
+            relative_path: path relative to the workspace vault, must stay inside it
+            content: full file contents to write
+        """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
+        out = state.write_vault_file(workspace_id, relative_path, content)
+        if out is None:
+            return {
+                "ok": False,
+                "error": (
+                    f"relative_path {relative_path!r} escapes workspace vault; "
+                    f"refusing to write"
+                ),
+            }
+        return out
+
+    @mcp.tool()
     def health() -> dict[str, Any]:
         """Liveness check + summary of MCP server state."""
         workspaces = state.list_workspaces()

@@ -9,6 +9,8 @@ EXPECTED_MCP_TOOLS = {
     # Shared / read
     "list_workspaces", "get_workspace", "list_papers", "get_paper",
     "list_vault_files", "read_vault_file", "health",
+    # Vault writes
+    "write_vault_note", "write_vault_file",
     # Research
     "expand_query", "research_search",
     # Ingestion
