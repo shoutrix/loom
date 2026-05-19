@@ -24,6 +24,7 @@ class ChatResponse(BaseModel):
     sources: list[SourceItem]
     num_chunks_retrieved: int
     num_propositions_retrieved: int
+    retriever_used: str = ""
 
 
 @router.post("", response_model=ChatResponse)
@@ -48,6 +49,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         sources=sources,
         num_chunks_retrieved=result.num_chunks_retrieved,
         num_propositions_retrieved=result.num_propositions_retrieved,
+        retriever_used=getattr(result, "retriever_used", ""),
     )
 
 

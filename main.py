@@ -140,6 +140,60 @@ def get_ingestion_worker() -> IngestionWorker:
     return _ingestion_worker
 
 
+def _build_retriever_for_workspace(
+    *,
+    base_settings: Settings,
+    ws_settings: Settings,
+    llm: LLMProvider,
+    embedder: EmbeddingProvider,
+    semantic_index,
+    keyword_index,
+    graph,
+):
+    """Construct the retriever named by `base_settings.retrieval.retriever`.
+
+    Default is 'adaptive', which holds references to both the full-context
+    and graph-hybrid retrievers and dispatches based on workspace token
+    count vs the active model's context window.
+    """
+    from loom.retrieval.dispatcher import AdaptiveRetriever
+    from loom.retrieval.full_context import FullContextRetriever
+    from loom.retrieval.graph_hybrid import GraphHybridRetriever
+
+    retrieval_cfg = base_settings.retrieval
+    name = retrieval_cfg.retriever
+
+    def _graph_hybrid():
+        return GraphHybridRetriever(
+            settings=ws_settings.search,
+            embedder=embedder,
+            semantic_index=semantic_index,
+            keyword_index=keyword_index,
+            graph=graph,
+        )
+
+    def _full_context():
+        return FullContextRetriever(
+            semantic_index=semantic_index,
+            graph=graph,
+        )
+
+    if name == "graph_hybrid":
+        return _graph_hybrid()
+    if name == "full_context":
+        return _full_context()
+    if name == "adaptive":
+        return AdaptiveRetriever(
+            llm=llm,
+            settings=retrieval_cfg,
+            semantic_index=semantic_index,
+            graph=graph,
+            full_context=_full_context(),
+            graph_hybrid=_graph_hybrid(),
+        )
+    raise ValueError(f"Unknown retriever {name!r}; available: graph_hybrid, full_context, adaptive")
+
+
 class WorkspaceManager:
     """Manages multiple isolated workspaces, each with its own graph/indexes/chat."""
 
@@ -287,6 +341,16 @@ class WorkspaceManager:
         if keyword_index.load(kw_path):
             print(f"  [Loom] [{workspace_id}] Loaded keyword index: {keyword_index.size} docs")
 
+        retriever = _build_retriever_for_workspace(
+            base_settings=self.base_settings,
+            ws_settings=ws_settings,
+            llm=self.llm,
+            embedder=self.embedder,
+            semantic_index=semantic_index,
+            keyword_index=keyword_index,
+            graph=graph,
+        )
+
         chat_engine = ChatEngine(
             settings=ws_settings,
             llm=self.llm,
@@ -294,6 +358,7 @@ class WorkspaceManager:
             semantic_index=semantic_index,
             keyword_index=keyword_index,
             graph=graph,
+            retriever=retriever,
         )
 
         chat_path = ws_settings.data_dir / "chat_history.json"

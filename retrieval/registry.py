@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from loom.retrieval.dispatcher import AdaptiveRetriever
+from loom.retrieval.full_context import FullContextRetriever
 from loom.retrieval.graph_hybrid import GraphHybridRetriever
 
 if TYPE_CHECKING:
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
 
 RETRIEVERS: dict[str, type] = {
     "graph_hybrid": GraphHybridRetriever,
+    "full_context": FullContextRetriever,
+    "adaptive": AdaptiveRetriever,
 }
 
 

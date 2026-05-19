@@ -82,6 +82,16 @@ class SearchSettings(BaseSettings):
     model_config = {"env_prefix": "LOOM_SEARCH_", "extra": "ignore"}
 
 
+class RetrievalSettings(BaseSettings):
+    """Retriever selection + adaptive dispatcher knobs."""
+
+    retriever: str = "adaptive"  # "adaptive" | "graph_hybrid" | "full_context"
+    full_context_budget_ratio: float = 0.7
+    full_context_min_safety_margin_tokens: int = 8000
+
+    model_config = {"env_prefix": "LOOM_RETRIEVAL_", "extra": "ignore"}
+
+
 class Neo4jSettings(BaseSettings):
     uri: str = ""
     username: str = "neo4j"
@@ -106,6 +116,7 @@ class Settings(BaseSettings):
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
 
     model_config = {"env_prefix": "LOOM_", "extra": "ignore", "env_file": str(_ENV_FILE), "env_file_encoding": "utf-8"}

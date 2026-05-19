@@ -129,6 +129,7 @@ class MCPWorkspaceLoader:
         """Build a ChatEngine for one request with the given LLM."""
         ws = self.load(workspace_id)
         llm.set_workspace_context(workspace_id)
+        retriever = self._build_retriever(ws, llm)
         engine = ChatEngine(
             settings=ws.settings,
             llm=llm,
@@ -136,8 +137,50 @@ class MCPWorkspaceLoader:
             semantic_index=ws.semantic_index,
             keyword_index=ws.keyword_index,
             graph=ws.graph,
+            retriever=retriever,
         )
         chat_path = ws.settings.data_dir / "chat_history.json"
         if chat_path.exists():
             engine.load_history(chat_path)
         return engine
+
+    def _build_retriever(self, ws: WorkspaceData, llm):
+        """Pick a retriever per settings.retrieval.retriever."""
+        from loom.retrieval.dispatcher import AdaptiveRetriever
+        from loom.retrieval.full_context import FullContextRetriever
+        from loom.retrieval.graph_hybrid import GraphHybridRetriever
+
+        cfg = self.settings.retrieval
+        name = cfg.retriever
+
+        def _graph_hybrid():
+            return GraphHybridRetriever(
+                settings=ws.settings.search,
+                embedder=self.embedder,
+                semantic_index=ws.semantic_index,
+                keyword_index=ws.keyword_index,
+                graph=ws.graph,
+            )
+
+        def _full_context():
+            return FullContextRetriever(
+                semantic_index=ws.semantic_index,
+                graph=ws.graph,
+            )
+
+        if name == "graph_hybrid":
+            return _graph_hybrid()
+        if name == "full_context":
+            return _full_context()
+        if name == "adaptive":
+            return AdaptiveRetriever(
+                llm=llm,
+                settings=cfg,
+                semantic_index=ws.semantic_index,
+                graph=ws.graph,
+                full_context=_full_context(),
+                graph_hybrid=_graph_hybrid(),
+            )
+        raise ValueError(
+            f"Unknown retriever {name!r}; available: graph_hybrid, full_context, adaptive"
+        )
