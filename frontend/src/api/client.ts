@@ -112,5 +112,46 @@ export const api = {
   deleteWorkspace: (workspaceId: string) =>
     del(`/workspaces/${workspaceId}`),
 
+  // Recommender (HTTP routes under /feed — kept for path-stability while
+  // package and tool names migrate to "recommender").
+  recommenderProfile: (workspaceId: string) =>
+    get(`/feed/profile/${encodeURIComponent(workspaceId)}`),
+
+  recommenderItems: (
+    workspaceId: string,
+    opts?: { status?: string; limit?: number; runId?: string },
+  ) => {
+    const params = new URLSearchParams()
+    if (opts?.status) params.set('status', opts.status)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.runId) params.set('run_id', opts.runId)
+    const qs = params.toString()
+    return get(`/feed/items/${encodeURIComponent(workspaceId)}${qs ? '?' + qs : ''}`)
+  },
+
+  recommenderRuns: (workspaceId: string, limit = 10) =>
+    get(`/feed/runs/${encodeURIComponent(workspaceId)}?limit=${limit}`),
+
+  recommenderRate: (workspaceId: string, itemId: string, rating: number, note = '') =>
+    post(
+      `/feed/items/${encodeURIComponent(workspaceId)}/${encodeURIComponent(itemId)}/rate`,
+      { rating, note },
+    ),
+
+  // Materialize is currently only exposed via MCP; the UI button is a UX
+  // affordance for the user to copy the right MCP call. Once an HTTP route
+  // is added this method will hit it directly.
+  recommenderMaterialize: (workspaceId: string, itemIds: string[]) => {
+    const cmd = `loom: materialize_into_workspace workspace_id="${workspaceId}" item_ids=${JSON.stringify(itemIds)}`
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(cmd)
+    }
+    return Promise.resolve({
+      ok: true,
+      hint: 'MCP command copied to clipboard. Run it from Claude Code or Cursor to materialize.',
+      command: cmd,
+    })
+  },
+
   health: () => get('/health'),
 }

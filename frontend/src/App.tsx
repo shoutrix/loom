@@ -6,10 +6,11 @@ import { GraphView } from './components/GraphView'
 import { NoteEditor } from './components/NoteEditor'
 import { PaperViewer } from './components/PaperViewer'
 import { QueueStatus } from './components/QueueStatus'
+import RecommenderPanel from './components/RecommenderPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { api } from './api/client'
 import {
-  Network, MessageCircle, X, FileText,
+  Network, MessageCircle, X, FileText, Sparkles,
 } from 'lucide-react'
 
 interface PaperMeta {
@@ -26,7 +27,7 @@ interface Tab {
   paperMeta?: PaperMeta
 }
 
-type RightView = 'graph' | 'chat'
+type RightView = 'graph' | 'chat' | 'recommender'
 
 function usePanelResize(
   initialWidth: number,
@@ -82,6 +83,7 @@ export default function App() {
 
   const [workspaceId, setWorkspaceId] = useState('')
   const [workspaceName, setWorkspaceName] = useState('')
+  const [workspaceCapabilities, setWorkspaceCapabilities] = useState<string[]>([])
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState('')
 
@@ -92,8 +94,9 @@ export default function App() {
     api.activeWorkspace().then((data: any) => {
       setWorkspaceId(data.workspace_id || 'default')
       setWorkspaceName(data.display_name || data.workspace_id || 'default')
+      setWorkspaceCapabilities(Array.isArray(data.capabilities) ? data.capabilities : [])
     })
-  }, [])
+  }, [refreshKey])
 
   const refresh = () => setRefreshKey(k => k + 1)
 
@@ -257,10 +260,24 @@ export default function App() {
             >
               <MessageCircle size={14} /> Chat
             </button>
+            {workspaceCapabilities.includes('recommender') && (
+              <button
+                onClick={() => setRightView('recommender')}
+                className={`flex-1 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors ${
+                  rightView === 'recommender'
+                    ? 'text-accent border-b-2 border-accent'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                <Sparkles size={14} /> Recs
+              </button>
+            )}
           </div>
           <div className="flex-1 overflow-hidden">
             {rightView === 'graph' ? (
               <GraphView key={refreshKey} />
+            ) : rightView === 'recommender' ? (
+              <RecommenderPanel workspaceId={workspaceId} />
             ) : (
               <ChatPanel />
             )}
