@@ -220,6 +220,7 @@ class WorkspaceManager:
                 "loaded_in_memory": is_loaded,
                 "created_at": meta.get("created_at", ""),
                 "description": meta.get("description", ""),
+                "kind": meta.get("kind", "research"),
             }
 
             if is_loaded:
@@ -445,6 +446,7 @@ from loom.api.routes_graph import router as graph_router
 from loom.api.routes_vault import router as vault_router
 from loom.api.routes_papers import router as papers_router
 from loom.api.routes_workspaces import router as workspaces_router
+from loom.api.routes_feed import router as feed_router
 
 app.include_router(ingest_router)
 app.include_router(search_router)
@@ -453,6 +455,7 @@ app.include_router(graph_router)
 app.include_router(vault_router)
 app.include_router(papers_router)
 app.include_router(workspaces_router)
+app.include_router(feed_router)
 
 
 @app.get("/")

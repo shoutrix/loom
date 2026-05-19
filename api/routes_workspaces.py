@@ -33,17 +33,20 @@ async def get_active_workspace() -> dict:
     mgr = get_workspace_manager()
     state = mgr.active
     display_name = mgr.active_workspace_id
+    kind = "research"
     meta_path = state.settings.data_dir / "workspace.json"
     if meta_path.exists():
         try:
             with open(meta_path) as f:
                 meta = json.load(f)
             display_name = meta.get("display_name", mgr.active_workspace_id)
+            kind = meta.get("kind", "research")
         except Exception:
             pass
     return {
         "workspace_id": mgr.active_workspace_id,
         "display_name": display_name,
+        "kind": kind,
         "graph": state.graph.stats(),
         "indexes": state.semantic_index.stats,
         "vault_files": len(state.vault.list_files()),
