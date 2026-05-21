@@ -20,6 +20,12 @@ from loom.citation_tree.centrality import (
     compute_pagerank_signals,
     compute_time_balanced_pagerank,
 )
+from loom.citation_tree.convergence import (
+    DEFAULT_MAX_PATHS_EXPLORED,
+    DEFAULT_PER_NODE_CAP,
+    compute_convergence_counts,
+    compute_convergence_signals,
+)
 from loom.citation_tree.signals import (
     NodeSignals,
     attach_signals_to_subgraph_dict,
@@ -54,10 +60,14 @@ __all__ = [
     "NodeSignals",
     "attach_signals_to_subgraph_dict",
     "build_subgraph",
+    "compute_convergence_counts",
+    "compute_convergence_signals",
     "compute_pagerank",
     "compute_pagerank_signals",
     "compute_signals",
     "compute_time_balanced_pagerank",
+    "DEFAULT_MAX_PATHS_EXPLORED",
+    "DEFAULT_PER_NODE_CAP",
     "load_subgraph",
     "resolve_target_id",
     "save_subgraph",

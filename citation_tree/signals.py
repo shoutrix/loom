@@ -61,6 +61,8 @@ class NodeSignals:
     # Centrality (C3): filled in by compute_pagerank_signals.
     local_pagerank: float = 0.0
     time_balanced_pagerank: float = 0.0
+    # Convergence (C4): filled in by compute_convergence_signals.
+    convergence_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +82,7 @@ class NodeSignals:
             citation_velocity=float(d.get("citation_velocity", 0.0) or 0.0),
             local_pagerank=float(d.get("local_pagerank", 0.0) or 0.0),
             time_balanced_pagerank=float(d.get("time_balanced_pagerank", 0.0) or 0.0),
+            convergence_count=int(d.get("convergence_count", 0) or 0),
         )
 
 
