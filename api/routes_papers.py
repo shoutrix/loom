@@ -442,9 +442,54 @@ def proxy_arxiv_pdf(arxiv_id: str):
         return Response(content=b"Failed to fetch PDF", status_code=502)
 
 
+def _strip_frontmatter(text: str) -> tuple[str, dict]:
+    """Return (body_without_frontmatter, parsed_frontmatter_dict).
+
+    Frontmatter is the standard YAML-ish block between two `---` lines at the
+    very top of the file. We parse only the simple `key: value` lines we
+    write ourselves; full YAML is overkill here.
+    """
+    if not text.startswith("---"):
+        return text, {}
+    parts = text.split("\n", 1)
+    if len(parts) != 2:
+        return text, {}
+    rest = parts[1]
+    end = rest.find("\n---")
+    if end == -1:
+        return text, {}
+    fm_block = rest[:end]
+    body = rest[end + 4 :].lstrip("\n")
+    meta: dict[str, str] = {}
+    for line in fm_block.splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            meta[k.strip()] = v.strip().strip('"').strip("'")
+    return body, meta
+
+
+def _canonical_source_url(rec, frontmatter: dict | None = None) -> str:
+    """Best-effort canonical source URL for a paper record."""
+    fm = frontmatter or {}
+    url = fm.get("source_url")
+    if url:
+        return url
+    arxiv_id = _resolve_arxiv_id(rec)
+    if arxiv_id:
+        return f"https://arxiv.org/abs/{arxiv_id}"
+    if rec.doi:
+        return f"https://doi.org/{rec.doi}"
+    return ""
+
+
 @router.get("/{paper_id:path}/content")
 def paper_content(paper_id: str) -> dict:
-    """Return the best available content for a paper (PDF URL or vault markdown)."""
+    """Return the best available content for a paper (PDF URL or vault markdown).
+
+    The response always carries a `source_url` field when one can be derived
+    (arXiv abs URL / DOI URL / vault frontmatter source_url) so the UI can
+    surface it as a prominent "Read original" link.
+    """
     from loom.main import get_app_state
     state = get_app_state()
     rec = state.registry.get(paper_id)
@@ -453,12 +498,28 @@ def paper_content(paper_id: str) -> dict:
 
     arxiv_id = _resolve_arxiv_id(rec)
 
+    # If we have a vault doc, prefer rendering that — it's the ingested
+    # markdown, far cleaner than embedding the PDF.
+    if rec.doc_id:
+        vault_files = state.vault.list_files("ingested")
+        for vf in vault_files:
+            raw = state.vault.read_file(vf.relative_path)
+            if raw and rec.doc_id[:8] in vf.relative_path:
+                body, fm = _strip_frontmatter(raw)
+                return {
+                    "content_type": "markdown",
+                    "content": body,
+                    "title": rec.title,
+                    "source_url": _canonical_source_url(rec, fm),
+                }
+
     if arxiv_id:
         return {
             "content_type": "pdf_url",
             "url": f"/papers/proxy-pdf/{arxiv_id}",
             "pdf_url": f"https://arxiv.org/abs/{arxiv_id}",
             "title": rec.title,
+            "source_url": f"https://arxiv.org/abs/{arxiv_id}",
         }
 
     if rec.doi:
@@ -467,21 +528,12 @@ def paper_content(paper_id: str) -> dict:
             "url": f"https://doi.org/{rec.doi}",
             "pdf_url": f"https://doi.org/{rec.doi}",
             "title": rec.title,
+            "source_url": f"https://doi.org/{rec.doi}",
         }
-
-    if rec.doc_id:
-        vault_files = state.vault.list_files("ingested")
-        for vf in vault_files:
-            content = state.vault.read_file(vf.relative_path)
-            if content and rec.doc_id[:8] in vf.relative_path:
-                return {
-                    "content_type": "markdown",
-                    "content": content,
-                    "title": rec.title,
-                }
 
     return {
         "content_type": "markdown",
         "content": f"# {rec.title}\n\n{rec.abstract or 'No content available.'}",
         "title": rec.title,
+        "source_url": _canonical_source_url(rec),
     }

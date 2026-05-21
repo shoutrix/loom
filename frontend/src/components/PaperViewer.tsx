@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../api/client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Loader2, FileText, ExternalLink, Plus, CheckCircle, GitBranch } from 'lucide-react'
+import {
+  Loader2, FileText, ExternalLink, Plus, CheckCircle, GitBranch,
+} from 'lucide-react'
 
 interface Props {
   paperId: string
@@ -16,6 +18,7 @@ interface PaperContent {
   pdf_url?: string
   content?: string
   title?: string
+  source_url?: string
   error?: string
 }
 
@@ -29,58 +32,18 @@ interface GraphPaper {
   abstract?: string
 }
 
-function IframeFallback({ url, pdfUrl, title }: { url: string; pdfUrl?: string; title: string }) {
-  const [failed, setFailed] = useState(false)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const timerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    setFailed(false)
-    // Some sites block iframes silently (no onerror). Detect by checking
-    // if the iframe remains blank after a timeout.
-    timerRef.current = window.setTimeout(() => {
-      try {
-        const doc = iframeRef.current?.contentDocument
-        // If we can access the document and it has no body content, it likely failed
-        if (doc && (!doc.body || doc.body.innerHTML === '')) {
-          setFailed(true)
-        }
-      } catch {
-        // Cross-origin — iframe loaded something, which is good
-      }
-    }, 4000)
-    return () => { if (timerRef.current) window.clearTimeout(timerRef.current) }
-  }, [url])
-
-  if (failed) {
-    const externalUrl = pdfUrl || url
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 px-8 text-center">
-        <FileText size={48} className="text-text-muted opacity-30" />
-        <p className="text-sm text-text-secondary">
-          This paper's host does not allow embedded viewing.
-        </p>
-        <a
-          href={externalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-accent text-white text-sm font-medium rounded-lg hover:bg-accent-dim transition-colors"
-        >
-          Open paper in new tab <ExternalLink size={14} />
-        </a>
-      </div>
-    )
+function formatSourceLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '')
+    // Trim trailing path noise, keep up to ~50 chars total.
+    const pathBit = u.pathname && u.pathname !== '/'
+      ? u.pathname.slice(0, 30) + (u.pathname.length > 30 ? '…' : '')
+      : ''
+    return host + pathBit
+  } catch {
+    return url
   }
-
-  return (
-    <iframe
-      ref={iframeRef}
-      src={url}
-      className="flex-1 w-full border-0"
-      title={title}
-      onError={() => setFailed(true)}
-    />
-  )
 }
 
 export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
@@ -188,55 +151,44 @@ export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
     )
   }
 
-  const toolbar = (
-    <div className="flex items-center justify-between px-4 py-2 bg-surface-1 border-b border-surface-3 shrink-0">
-      <span className="text-sm text-text-secondary truncate flex-1 mr-3">{title}</span>
-      <div className="flex items-center gap-2 shrink-0">
+  // Compact action strip — kept above the article header so the article
+  // itself reads as clean prose with a single prominent source link.
+  const actions = (
+    <div className="flex items-center justify-end gap-2 px-6 py-2 bg-surface-1 border-b border-surface-3 shrink-0 text-xs">
+      <button
+        onClick={exploreGraph}
+        disabled={exploring}
+        className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-2 text-text-secondary font-medium rounded hover:bg-surface-3 disabled:opacity-50 transition-colors"
+      >
+        {exploring ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} />}
+        Explore graph
+      </button>
+      {canAdd && (
         <button
-          onClick={exploreGraph}
-          disabled={exploring}
-          className="flex items-center gap-1.5 px-3 py-1 bg-surface-2 text-text-secondary text-xs font-medium rounded-lg hover:bg-surface-3 disabled:opacity-50 transition-colors"
+          onClick={addToLibrary}
+          disabled={adding}
+          className="flex items-center gap-1.5 px-2.5 py-1 bg-accent text-white font-medium rounded hover:bg-accent-dim disabled:opacity-50 transition-colors"
         >
-          {exploring ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} />}
-          Explore Graph
+          {adding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+          Add to knowledge base
         </button>
-        {canAdd && (
-          <button
-            onClick={addToLibrary}
-            disabled={adding}
-            className="flex items-center gap-1.5 px-3 py-1 bg-accent text-white text-xs font-medium rounded-lg hover:bg-accent-dim disabled:opacity-50 transition-colors"
-          >
-            {adding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-            Add to Knowledge Base
-          </button>
-        )}
-        {isQueued && (
-          <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-lg">
-            <Loader2 size={12} className="animate-spin" /> Queued
-          </span>
-        )}
-        {isIngested && (
-          <span className="flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">
-            <CheckCircle size={12} /> In Knowledge Base
-          </span>
-        )}
-        {data.content_type === 'pdf_url' && data.url && (
-          <a
-            href={data.pdf_url || data.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 text-xs text-accent hover:text-accent-dim"
-          >
-            Open original <ExternalLink size={12} />
-          </a>
-        )}
-      </div>
+      )}
+      {isQueued && (
+        <span className="flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-1 rounded">
+          <Loader2 size={12} className="animate-spin" /> Queued
+        </span>
+      )}
+      {isIngested && (
+        <span className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-1 rounded">
+          <CheckCircle size={12} /> In knowledge base
+        </span>
+      )}
     </div>
   )
 
   const graphPanel = showGraph && (
-    <div className="border-t border-surface-3 bg-surface-0 max-h-72 overflow-y-auto">
-      <div className="px-4 py-2 border-b border-surface-3 flex items-center justify-between">
+    <div className="border-b border-surface-3 bg-surface-0 max-h-72 overflow-y-auto">
+      <div className="px-6 py-2 border-b border-surface-3 flex items-center justify-between">
         <span className="text-xs font-semibold text-text-secondary">
           {exploring ? 'Exploring citation graph...' : `${graphPapers.length} related papers`}
         </span>
@@ -251,12 +203,12 @@ export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
         </div>
       )}
       {graphError && (
-        <div className="px-4 py-3 text-xs text-red-500">{graphError}</div>
+        <div className="px-6 py-3 text-xs text-red-500">{graphError}</div>
       )}
       {!exploring && graphPapers.length > 0 && (
         <div className="divide-y divide-surface-2">
           {graphPapers.map(p => (
-            <div key={p.id} className="px-4 py-2 flex items-start gap-2 hover:bg-surface-1">
+            <div key={p.id} className="px-6 py-2 flex items-start gap-2 hover:bg-surface-1">
               <div className="flex-1 min-w-0">
                 <button
                   onClick={() => onOpenPaper?.(p.id, p.title)}
@@ -285,23 +237,65 @@ export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
     </div>
   )
 
+  // Shared header: title + prominent source link. Same shape for every paper,
+  // whether the body is rendered as markdown or fell back to the iframe path.
+  const header = (
+    <header className="wiki-header px-6">
+      <h1 className="wiki-title">{data.title || title}</h1>
+      {data.source_url && (
+        <div className="wiki-source">
+          Source:{' '}
+          <a href={data.source_url} target="_blank" rel="noopener noreferrer">
+            {formatSourceLabel(data.source_url)} <ExternalLink size={11} className="inline align-text-bottom" />
+          </a>
+        </div>
+      )}
+    </header>
+  )
+
+  // Iframe fallback path (no ingested content, only a URL). Rare after P10
+  // (shortlisted papers are hidden in SourcesPanel) but still reachable via
+  // graph-explore "open" actions and any non-ingested registry entries.
   if (data.content_type === 'pdf_url' && data.url) {
     return (
       <div className="flex flex-col h-full">
-        {toolbar}
+        {actions}
         {graphPanel}
-        <IframeFallback url={data.url} pdfUrl={data.pdf_url} title={title} />
+        <div className="flex-1 overflow-y-auto">
+          <div className="pt-6">{header}</div>
+          <div className="px-6 pb-6">
+            <a
+              href={data.source_url || data.pdf_url || data.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 mt-2 bg-accent text-white text-sm font-medium rounded-lg hover:bg-accent-dim transition-colors"
+            >
+              Open original in new tab <ExternalLink size={14} />
+            </a>
+            <p className="text-xs text-text-muted mt-3 max-w-[740px] mx-auto">
+              This paper hasn't been ingested into the knowledge base yet, so there's
+              no in-app readable view. Click "Add to knowledge base" above to ingest
+              it; once ingestion completes, the full text will render here in
+              Wikipedia-style markdown.
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="flex flex-col h-full">
-      {toolbar}
+      {actions}
       {graphPanel}
-      <div className="flex-1 overflow-y-auto px-8 py-6">
-        <div className="prose max-w-3xl mx-auto text-sm">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.content || ''}</ReactMarkdown>
+      <div className="flex-1 overflow-y-auto bg-surface-0">
+        <div className="pt-6 pb-12">
+          {header}
+          <article className="wiki-article px-6">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {data.content || ''}
+            </ReactMarkdown>
+          </article>
         </div>
       </div>
     </div>
