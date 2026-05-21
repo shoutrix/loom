@@ -28,6 +28,20 @@ from loom.citation_tree.classifier import (
     classify_tiers,
     compute_scores,
 )
+from loom.citation_tree.llm_tiebreak import (
+    DEFAULT_AMBIGUOUS_BAND,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_MIN_CANDIDATES,
+    run_llm_tiebreak,
+)
+from loom.citation_tree.service import (
+    BuildParams,
+    CitationTree,
+    build_citation_tree,
+    load_tree,
+    save_tree,
+    tree_path,
+)
 from loom.citation_tree.convergence import (
     DEFAULT_MAX_PATHS_EXPLORED,
     DEFAULT_PER_NODE_CAP,
@@ -87,4 +101,14 @@ __all__ = [
     "save_subgraph",
     "signals_from_subgraph_dict",
     "subgraph_path",
+    "BuildParams",
+    "CitationTree",
+    "DEFAULT_AMBIGUOUS_BAND",
+    "DEFAULT_BATCH_SIZE",
+    "DEFAULT_MIN_CANDIDATES",
+    "build_citation_tree",
+    "load_tree",
+    "run_llm_tiebreak",
+    "save_tree",
+    "tree_path",
 ]

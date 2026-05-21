@@ -448,6 +448,126 @@ def get_categorization() -> dict:
     return body
 
 
+# ----- citation tree (C6+C7) --------------------------------------------------
+
+_citation_tree_jobs: dict[str, dict[str, Any]] = {}
+_citation_tree_lock = threading.Lock()
+
+
+class CitationTreeStartRequest(BaseModel):
+    paper_id: str
+    title: str = ""
+    depth: int = 3
+    per_hop_cap: int = 80
+    max_nodes: int = 500
+    use_llm_tiebreak: bool = True
+
+
+def _run_citation_tree_job(
+    workspace_id: str, job_id: str, req: "CitationTreeStartRequest",
+) -> None:
+    """Background worker: build the full citation tree end-to-end."""
+    from loom.citation_tree import BuildParams, build_citation_tree
+    from loom.config import get_settings
+    from loom.main import get_workspace_manager
+    from loom.tools.paper_search.sources import SemanticScholarClient
+
+    mgr = get_workspace_manager()
+    try:
+        if mgr.active_workspace_id != workspace_id:
+            mgr.switch(workspace_id)
+        state = mgr.active
+
+        # S2 client honours the user's API key from settings if set.
+        settings = get_settings()
+        s2 = SemanticScholarClient(api_key=settings.semantic_scholar_api_key or None)
+
+        def progress(step: str, info: dict) -> None:
+            with _citation_tree_lock:
+                job = _citation_tree_jobs.get(job_id, {})
+                steps = job.setdefault("steps", [])
+                steps.append({"step": step, "info": info})
+
+        tree = build_citation_tree(
+            req.paper_id,
+            state.settings.data_dir,
+            s2_client=s2,
+            llm=mgr.llm if req.use_llm_tiebreak else None,
+            title=req.title,
+            params=BuildParams(
+                depth=req.depth,
+                per_hop_cap=req.per_hop_cap,
+                max_nodes=req.max_nodes,
+                use_llm_tiebreak=req.use_llm_tiebreak,
+            ),
+            progress_cb=progress,
+        )
+        with _citation_tree_lock:
+            _citation_tree_jobs[job_id] = {
+                **_citation_tree_jobs.get(job_id, {}),
+                "state": "completed",
+                "workspace_id": workspace_id,
+                "target_id": tree.target.get("paper_id", req.paper_id),
+                "stats": tree.stats,
+                "finished_at": tree.generated_at,
+            }
+    except Exception as e:  # pragma: no cover — exposed via status route
+        with _citation_tree_lock:
+            _citation_tree_jobs[job_id] = {
+                **_citation_tree_jobs.get(job_id, {}),
+                "state": "failed",
+                "workspace_id": workspace_id,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+
+@router.post("/citation-tree/start")
+def start_citation_tree(req: CitationTreeStartRequest) -> dict:
+    """Kick off a background citation-tree build for the active workspace."""
+    from loom.main import get_workspace_manager
+
+    mgr = get_workspace_manager()
+    workspace_id = mgr.active_workspace_id
+    job_id = uuid.uuid4().hex
+    with _citation_tree_lock:
+        _citation_tree_jobs[job_id] = {
+            "state": "running",
+            "workspace_id": workspace_id,
+            "paper_id": req.paper_id,
+            "started_at": time.time(),
+            "steps": [],
+        }
+    threading.Thread(
+        target=_run_citation_tree_job,
+        args=(workspace_id, job_id, req),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "workspace_id": workspace_id, "state": "running"}
+
+
+@router.get("/citation-tree/status/{job_id}")
+def citation_tree_status(job_id: str) -> dict:
+    with _citation_tree_lock:
+        job = _citation_tree_jobs.get(job_id)
+    if job is None:
+        return {"state": "unknown", "job_id": job_id}
+    return {"job_id": job_id, **job}
+
+
+@router.get("/citation-tree/cached/{paper_id:path}")
+def citation_tree_cached(paper_id: str) -> dict:
+    """Return the cached citation tree for the active workspace, if any."""
+    from loom.citation_tree import load_tree, resolve_target_id
+    from loom.main import get_app_state
+
+    state = get_app_state()
+    resolved = resolve_target_id(paper_id)
+    tree = load_tree(state.settings.data_dir, resolved)
+    if tree is None:
+        return {"exists": False, "paper_id": resolved}
+    return {"exists": True, "paper_id": resolved, "tree": tree.to_dict()}
+
+
 class ExploreGraphRequest(BaseModel):
     paper_id: str
     title: str = ""
