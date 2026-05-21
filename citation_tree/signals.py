@@ -58,6 +58,9 @@ class NodeSignals:
     year: int | None = None
     age_years: int | None = None
     citation_velocity: float = 0.0
+    # Centrality (C3): filled in by compute_pagerank_signals.
+    local_pagerank: float = 0.0
+    time_balanced_pagerank: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -75,6 +78,8 @@ class NodeSignals:
             year=d.get("year") if isinstance(d.get("year"), int) else None,
             age_years=d.get("age_years") if isinstance(d.get("age_years"), int) else None,
             citation_velocity=float(d.get("citation_velocity", 0.0) or 0.0),
+            local_pagerank=float(d.get("local_pagerank", 0.0) or 0.0),
+            time_balanced_pagerank=float(d.get("time_balanced_pagerank", 0.0) or 0.0),
         )
 
 
