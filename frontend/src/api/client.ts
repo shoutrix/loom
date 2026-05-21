@@ -66,6 +66,12 @@ export const api = {
 
   registry: () => get('/papers/registry'),
 
+  // Categorization (Wikipedia-style hierarchical view of the workspace)
+  startCategorize: () => post('/papers/categorize'),
+  categorizeStatus: (jobId: string) =>
+    get(`/papers/categorize/status/${encodeURIComponent(jobId)}`),
+  categorization: () => get('/papers/categorization'),
+
   chat: (message: string) => post('/chat', { message }),
 
   clearChat: () => post('/chat/clear'),

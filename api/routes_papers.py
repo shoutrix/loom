@@ -322,6 +322,132 @@ def list_registry() -> dict:
     }
 
 
+# ----- categorization (Wikipedia-style hierarchical view) ---------------------
+
+_categorize_jobs: dict[str, dict[str, Any]] = {}
+_categorize_lock = threading.Lock()
+
+
+def _non_shortlisted_papers_for_categorize(state) -> list:
+    """Collect (paper_id, title, abstract) inputs for the active workspace.
+
+    Mirrors the UI filter from P10: papers with status=='shortlisted' are
+    excluded — categorization is about what's actually in the knowledge
+    base, not search candidates.
+    """
+    from loom.categorize import PaperInput
+
+    out: list[PaperInput] = []
+    for rec in state.registry.get_all():
+        if rec.status == "shortlisted":
+            continue
+        out.append(
+            PaperInput(
+                paper_id=rec.paper_id,
+                title=rec.title or rec.paper_id,
+                abstract=(getattr(rec, "abstract", "") or "")[:2000],
+            )
+        )
+    return out
+
+
+def _run_categorize_job(workspace_id: str, job_id: str) -> None:
+    """Background worker: build categorization, persist, mark done."""
+    from loom.categorize import generate_categorization, save_categorization
+    from loom.main import get_workspace_manager
+
+    mgr = get_workspace_manager()
+    try:
+        # Make sure the worker uses the same in-memory state the API does.
+        if mgr.active_workspace_id != workspace_id:
+            mgr.switch(workspace_id)
+        state = mgr.active
+        papers = _non_shortlisted_papers_for_categorize(state)
+        cat = generate_categorization(mgr.llm, papers)
+        save_categorization(state.settings.data_dir, cat)
+        with _categorize_lock:
+            _categorize_jobs[job_id] = {
+                "state": "completed",
+                "workspace_id": workspace_id,
+                "paper_count": cat.paper_count,
+                "finished_at": cat.generated_at,
+            }
+    except Exception as e:  # pragma: no cover — surfaced through the status route
+        with _categorize_lock:
+            _categorize_jobs[job_id] = {
+                "state": "failed",
+                "workspace_id": workspace_id,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+
+@router.post("/categorize")
+def start_categorize() -> dict:
+    """Kick off (or re-run) categorization for the active workspace.
+
+    Returns a job_id the caller can poll via `/papers/categorize/status/{id}`.
+    The actual LLM call happens on a background thread so the HTTP request
+    returns immediately.
+    """
+    from loom.main import get_workspace_manager
+
+    mgr = get_workspace_manager()
+    workspace_id = mgr.active_workspace_id
+    job_id = uuid.uuid4().hex
+    with _categorize_lock:
+        _categorize_jobs[job_id] = {
+            "state": "running",
+            "workspace_id": workspace_id,
+            "started_at": time.time(),
+        }
+    threading.Thread(
+        target=_run_categorize_job,
+        args=(workspace_id, job_id),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "workspace_id": workspace_id, "state": "running"}
+
+
+@router.get("/categorize/status/{job_id}")
+def categorize_status(job_id: str) -> dict:
+    with _categorize_lock:
+        job = _categorize_jobs.get(job_id)
+    if job is None:
+        return {"state": "unknown", "job_id": job_id}
+    return {"job_id": job_id, **job}
+
+
+@router.get("/categorization")
+def get_categorization() -> dict:
+    """Return the cached categorization for the active workspace, with a
+    `stale` flag indicating whether the count has drifted past the
+    DRIFT_THRESHOLD (P12: 20%) since it was last generated.
+    """
+    from loom.categorize import (
+        MIN_PAPERS_TO_CATEGORIZE,
+        is_stale,
+        load_categorization,
+    )
+    from loom.main import get_app_state
+
+    state = get_app_state()
+    cat = load_categorization(state.settings.data_dir)
+    current_count = sum(
+        1 for r in state.registry.get_all() if r.status != "shortlisted"
+    )
+    stale = is_stale(cat, current_count)
+
+    body: dict[str, Any] = {
+        "current_paper_count": current_count,
+        "min_papers_to_categorize": MIN_PAPERS_TO_CATEGORIZE,
+        "stale": stale,
+        "exists": cat is not None,
+    }
+    if cat is not None:
+        body["categorization"] = cat.to_dict()
+    return body
+
+
 class ExploreGraphRequest(BaseModel):
     paper_id: str
     title: str = ""
