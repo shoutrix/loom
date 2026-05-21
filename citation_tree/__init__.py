@@ -11,6 +11,12 @@ Phases:
 
 from __future__ import annotations
 
+from loom.citation_tree.signals import (
+    NodeSignals,
+    attach_signals_to_subgraph_dict,
+    compute_signals,
+    signals_from_subgraph_dict,
+)
 from loom.citation_tree.subgraph import (
     DEFAULT_DEPTH,
     DEFAULT_MAX_NODES,
@@ -32,9 +38,13 @@ __all__ = [
     "CitationSubgraph",
     "Edge",
     "Node",
+    "NodeSignals",
+    "attach_signals_to_subgraph_dict",
     "build_subgraph",
+    "compute_signals",
     "load_subgraph",
     "resolve_target_id",
     "save_subgraph",
+    "signals_from_subgraph_dict",
     "subgraph_path",
 ]
