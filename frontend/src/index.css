@@ -184,3 +184,165 @@
   text-decoration: none;
 }
 .wiki-header .wiki-source a:hover { text-decoration: underline; }
+
+/* ---------------------------------------------------------------- */
+/* PaperCard — VoxSpar-inspired structured review (loom-light theme) */
+/* ---------------------------------------------------------------- */
+
+.paper-card-container {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  color: #1f2937;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+.paper-card-header {
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #e1e4e8;
+}
+
+.meta-pill {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  background: #f0f1f3;
+  border: 1px solid #e1e4e8;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin-right: 0.35rem;
+}
+
+.paper-card-tldr {
+  background: #f8fafc;
+  border-left: 3px solid #2563eb;
+  padding: 0.85rem 1.1rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: #1f2937;
+}
+
+.paper-card-field {
+  margin: 0.85rem 0;
+}
+
+.paper-card-field-label {
+  font-weight: 600;
+  color: #6a3fb3;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 0.3rem;
+}
+
+.paper-card-field-body {
+  display: inline;
+}
+
+.paper-card-section {
+  margin: 1.25rem 0 0.5rem;
+}
+
+.paper-card-section-label {
+  font-weight: 600;
+  color: #6a3fb3;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+.paper-card-list,
+.paper-card-results,
+.paper-card-related {
+  margin: 0.4rem 0 0;
+  padding-left: 1.3rem;
+  list-style: disc;
+}
+.paper-card-list li,
+.paper-card-results li,
+.paper-card-related li {
+  margin: 0.3rem 0;
+}
+
+.paper-card-results li {
+  font-variant-numeric: tabular-nums;
+}
+
+.related-title { font-weight: 600; color: #1f2937; }
+.related-why { color: #6b7280; }
+
+.dataset-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.45rem 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.dataset-name {
+  font-weight: 600;
+  color: #1f2937;
+}
+.dataset-meta {
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin-top: 0.15rem;
+}
+
+/* Strengths/Limitations 2-up grid (VoxSpar's "good-bad" idiom) */
+.gb-block {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e1e4e8;
+}
+.gb-block.gb-good {
+  border-left: 3px solid #16a34a;
+}
+.gb-block.gb-bad {
+  border-left: 3px solid #dc2626;
+}
+.gb-block h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.gb-block.gb-good h4 { color: #16a34a; }
+.gb-block.gb-bad  h4 { color: #dc2626; }
+.gb-block ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+  font-size: 0.92rem;
+}
+.gb-block li { margin: 0.25rem 0; }
+
+/* Workspace relevance block — purple-bordered like VoxSpar */
+.paper-card-relevance {
+  margin: 1.5rem 0 0.5rem;
+  padding: 0.75rem 1.1rem;
+  background: linear-gradient(90deg, rgba(106, 63, 179, 0.06), transparent);
+  border-left: 3px solid #6a3fb3;
+  border-radius: 6px;
+}
+.paper-card-relevance h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6a3fb3;
+  font-weight: 600;
+}
+.paper-card-relevance p {
+  margin: 0;
+  color: #1f2937;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}

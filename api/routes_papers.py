@@ -568,6 +568,169 @@ def citation_tree_cached(paper_id: str) -> dict:
     return {"exists": True, "paper_id": resolved, "tree": tree.to_dict()}
 
 
+# ----- paper cards (D1+D2) ---------------------------------------------------
+
+_paper_card_jobs: dict[str, dict[str, Any]] = {}
+_paper_card_lock = threading.Lock()
+
+
+def _header_for_paper(rec, source_url: str) -> dict:
+    """Best-effort header metadata from the registry record."""
+    arxiv_id = ""
+    doi = ""
+    venue = ""
+    year = None
+    authors: list[str] = []
+    title = getattr(rec, "title", "") or ""
+    arxiv_id = getattr(rec, "arxiv_id", "") or ""
+    doi = getattr(rec, "doi", "") or ""
+    # Some registries include year / venue / authors; use them if present.
+    if hasattr(rec, "year") and isinstance(getattr(rec, "year", None), int):
+        year = rec.year
+    if hasattr(rec, "venue") and rec.venue:
+        venue = rec.venue
+    if hasattr(rec, "authors") and isinstance(rec.authors, list):
+        authors = [str(a) for a in rec.authors]
+    return {
+        "title": title,
+        "authors": authors,
+        "venue": venue,
+        "year": year,
+        "source_url": source_url,
+        "arxiv_id": arxiv_id,
+        "doi": doi,
+    }
+
+
+def _load_paper_markdown(state, rec) -> str:
+    """Best-effort: read the paper's vault markdown if it's been ingested."""
+    if not getattr(rec, "doc_id", None):
+        return ""
+    vault_files = state.vault.list_files("ingested")
+    for vf in vault_files:
+        if rec.doc_id[:8] in vf.relative_path:
+            content = state.vault.read_file(vf.relative_path)
+            if content:
+                return content
+    return ""
+
+
+def _run_paper_card_job(workspace_id: str, paper_id: str, job_id: str) -> None:
+    """Background worker: extract paper card via LLM, persist."""
+    from loom.main import get_workspace_manager
+    from loom.paper_card import generate_paper_card, save_card
+
+    mgr = get_workspace_manager()
+    try:
+        if mgr.active_workspace_id != workspace_id:
+            mgr.switch(workspace_id)
+        state = mgr.active
+        rec = state.registry.get(paper_id)
+        if rec is None:
+            raise ValueError(f"paper {paper_id!r} not in registry")
+        if getattr(rec, "status", "") != "ingested":
+            raise ValueError(
+                f"paper {paper_id!r} has status {rec.status!r}; "
+                f"cards build only after ingestion"
+            )
+
+        markdown = _load_paper_markdown(state, rec)
+        if not markdown:
+            raise ValueError(f"no vault markdown for paper {paper_id!r}")
+
+        # Strip the YAML frontmatter so the LLM doesn't re-parrot the metadata.
+        body = markdown
+        if body.startswith("---"):
+            parts = body.split("\n", 1)
+            if len(parts) == 2 and "\n---" in parts[1]:
+                body = parts[1].split("\n---", 1)[1].lstrip("\n")
+
+        # Derive source_url + read workspace description.
+        from loom.api.routes_papers import _canonical_source_url
+        source_url = _canonical_source_url(rec)
+        workspace_description = ""
+        meta_path = state.settings.data_dir / "workspace.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                workspace_description = str(meta.get("description", ""))
+            except Exception:
+                pass
+
+        header = _header_for_paper(rec, source_url)
+        card = generate_paper_card(
+            body,
+            llm=mgr.llm,
+            paper_id=paper_id,
+            header=header,
+            workspace_description=workspace_description,
+        )
+        save_card(state.settings.data_dir, card)
+        with _paper_card_lock:
+            _paper_card_jobs[job_id] = {
+                **_paper_card_jobs.get(job_id, {}),
+                "state": "completed",
+                "workspace_id": workspace_id,
+                "paper_id": paper_id,
+                "finished_at": card.generated_at,
+            }
+    except Exception as e:  # pragma: no cover — surfaced via status endpoint
+        with _paper_card_lock:
+            _paper_card_jobs[job_id] = {
+                **_paper_card_jobs.get(job_id, {}),
+                "state": "failed",
+                "workspace_id": workspace_id,
+                "paper_id": paper_id,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+
+@router.post("/card/build/{paper_id:path}")
+def start_paper_card(paper_id: str) -> dict:
+    """Kick off a background paper-card build for the active workspace."""
+    import json as _json_marker  # noqa: F401 (silence linter for the threaded path)
+    from loom.main import get_workspace_manager
+
+    mgr = get_workspace_manager()
+    workspace_id = mgr.active_workspace_id
+    job_id = uuid.uuid4().hex
+    with _paper_card_lock:
+        _paper_card_jobs[job_id] = {
+            "state": "running",
+            "workspace_id": workspace_id,
+            "paper_id": paper_id,
+            "started_at": time.time(),
+        }
+    threading.Thread(
+        target=_run_paper_card_job,
+        args=(workspace_id, paper_id, job_id),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "paper_id": paper_id, "state": "running"}
+
+
+@router.get("/card/status/{job_id}")
+def paper_card_status(job_id: str) -> dict:
+    with _paper_card_lock:
+        job = _paper_card_jobs.get(job_id)
+    if job is None:
+        return {"state": "unknown", "job_id": job_id}
+    return {"job_id": job_id, **job}
+
+
+@router.get("/card/cached/{paper_id:path}")
+def paper_card_cached(paper_id: str) -> dict:
+    """Return the cached paper card for the active workspace, if any."""
+    from loom.main import get_app_state
+    from loom.paper_card import load_card
+
+    state = get_app_state()
+    card = load_card(state.settings.data_dir, paper_id)
+    if card is None:
+        return {"exists": False, "paper_id": paper_id}
+    return {"exists": True, "paper_id": paper_id, "card": card.to_dict()}
+
+
 class ExploreGraphRequest(BaseModel):
     paper_id: str
     title: str = ""

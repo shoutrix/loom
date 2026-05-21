@@ -64,6 +64,16 @@ export const api = {
   exploreGraphResult: (jobId: string) =>
     get(`/papers/explore-graph/${encodeURIComponent(jobId)}/result`),
 
+  // Paper cards (13-field structured review; D1/D2).
+  startPaperCard: (paperId: string) =>
+    post(`/papers/card/build/${encodeURIComponent(paperId)}`),
+
+  paperCardStatus: (jobId: string) =>
+    get(`/papers/card/status/${encodeURIComponent(jobId)}`),
+
+  paperCardCached: (paperId: string) =>
+    get(`/papers/card/cached/${encodeURIComponent(paperId)}`),
+
   // Citation tree (multi-hop subgraph + tier classification; C6/C7).
   startCitationTree: (params: {
     paper_id: string

@@ -1,0 +1,238 @@
+"""D1+D2 — paper_card: schema, extractor, persistence, routes."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+# ----- schema + persistence --------------------------------------------------
+
+
+def test_card_round_trip(tmp_path: Path):
+    from loom.paper_card import (
+        Dataset, PaperCard, RelatedWork,
+        card_path, load_card, save_card,
+    )
+
+    card = PaperCard(
+        version=1,
+        generated_at="2026-05-21T12:00:00+00:00",
+        model="stub-pro",
+        paper_id="ARXIV:1706.03762",
+        title="Attention Is All You Need",
+        authors=["Vaswani", "Shazeer", "Parmar"],
+        venue="NeurIPS",
+        year=2017,
+        source_url="https://arxiv.org/abs/1706.03762",
+        arxiv_id="1706.03762",
+        tldr="Transformers replace recurrence with self-attention.",
+        problem="RNNs are slow and hard to parallelise.",
+        approach="Multi-head self-attention over learned embeddings.",
+        contributions=["First fully-attention model that beats LSTMs"],
+        datasets=[Dataset(name="WMT'14 En-De", size="4.5M sentence pairs", type="translation")],
+        setup="Compared against ByteNet and ConvS2S.",
+        results=["28.4 BLEU on WMT'14 En-De"],
+        conclusion="Attention alone is sufficient.",
+        strengths=["Parallelisable", "State of the art"],
+        limitations=["Quadratic memory in sequence length"],
+        related_work=[RelatedWork(title="Seq2Seq", why="Sequence-to-sequence baseline.")],
+        workspace_relevance="Foundational for any transformer-based architecture in the workspace.",
+        open_questions=["Can this scale to longer contexts?"],
+    )
+    out = save_card(tmp_path, card)
+    assert out == card_path(tmp_path, "ARXIV:1706.03762")
+    assert out.exists()
+
+    back = load_card(tmp_path, "ARXIV:1706.03762")
+    assert back is not None
+    assert back.title == "Attention Is All You Need"
+    assert back.authors == ["Vaswani", "Shazeer", "Parmar"]
+    assert back.year == 2017
+    assert len(back.datasets) == 1
+    assert back.datasets[0].name == "WMT'14 En-De"
+    assert back.related_work[0].title == "Seq2Seq"
+
+
+def test_card_load_returns_none_when_missing(tmp_path: Path):
+    from loom.paper_card import load_card
+    assert load_card(tmp_path, "ARXIV:never-built") is None
+
+
+def test_card_load_returns_none_on_corrupt(tmp_path: Path):
+    from loom.paper_card import card_path, load_card
+    p = card_path(tmp_path, "ARXIV:bad")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("not json")
+    assert load_card(tmp_path, "ARXIV:bad") is None
+
+
+# ----- extractor with a stub LLM --------------------------------------------
+
+
+_GOLDEN_CARD_JSON = {
+    "tldr": "Transformers replace recurrence with attention.",
+    "problem": "RNN-based seq2seq is hard to parallelise.",
+    "approach": "Multi-head self-attention with positional encodings.",
+    "contributions": [
+        "First fully-attention model SOTA on WMT'14",
+        "Multi-head attention formulation",
+    ],
+    "datasets": [
+        {"name": "WMT'14 En-De", "size": "4.5M pairs", "type": "translation"},
+        {"name": "WMT'14 En-Fr", "size": "36M pairs", "type": "translation"},
+    ],
+    "setup": "Baselines: ByteNet, ConvS2S. Metric: BLEU.",
+    "results": ["28.4 BLEU on En-De", "41.0 BLEU on En-Fr"],
+    "conclusion": "Self-attention is sufficient for sequence modelling.",
+    "strengths": ["Highly parallelisable", "State of the art"],
+    "limitations": ["Quadratic memory", "Hard to extrapolate to longer seqs"],
+    "related_work": [
+        {"title": "Seq2Seq learning", "why": "Direct baseline."},
+        {"title": "ByteNet", "why": "Convolutional comparison."},
+    ],
+    "workspace_relevance": "Foundational for everything in this workspace.",
+    "open_questions": ["Long-context efficiency?", "Better positional encodings?"],
+}
+
+
+class StubLLM:
+    def __init__(self, response_text: str):
+        self._text = response_text
+        self.generate_calls = 0
+
+    def resolve_model_id(self, role):
+        return "stub-pro"
+
+    def generate(self, prompt, **kw):
+        self.generate_calls += 1
+        from loom.llm.provider import LLMResponse
+        return LLMResponse(text=self._text, model="stub-pro")
+
+
+def test_extractor_happy_path():
+    from loom.paper_card import generate_paper_card
+
+    llm = StubLLM(json.dumps(_GOLDEN_CARD_JSON))
+    card = generate_paper_card(
+        "# Attention Is All You Need\n\nAbstract: ...",
+        llm=llm,
+        paper_id="ARXIV:1706.03762",
+        header={
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani"],
+            "venue": "NeurIPS",
+            "year": 2017,
+            "source_url": "https://arxiv.org/abs/1706.03762",
+            "arxiv_id": "1706.03762",
+        },
+        workspace_description="Foundations of transformers",
+    )
+    assert llm.generate_calls == 1
+    assert card.paper_id == "ARXIV:1706.03762"
+    assert card.title == "Attention Is All You Need"
+    assert card.year == 2017
+
+    # 13 fields populated.
+    assert card.tldr.startswith("Transformers")
+    assert "self-attention" in card.approach
+    assert len(card.contributions) == 2
+    assert len(card.datasets) == 2
+    assert card.datasets[0].name == "WMT'14 En-De"
+    assert card.datasets[0].size == "4.5M pairs"
+    assert "BLEU" in card.results[0]
+    assert len(card.strengths) == 2
+    assert len(card.limitations) == 2
+    assert len(card.related_work) == 2
+    assert "workspace" in card.workspace_relevance.lower()
+    assert len(card.open_questions) == 2
+
+
+def test_extractor_handles_fenced_json():
+    from loom.paper_card import generate_paper_card
+
+    fenced = "```json\n" + json.dumps(_GOLDEN_CARD_JSON) + "\n```"
+    llm = StubLLM(fenced)
+    card = generate_paper_card(
+        "paper text",
+        llm=llm,
+        paper_id="X",
+        header={},
+    )
+    assert card.tldr.startswith("Transformers")
+
+
+def test_extractor_handles_malformed_json_returns_header_only():
+    """Bad LLM output -> we still return a card; just the header fields."""
+    from loom.paper_card import generate_paper_card
+
+    llm = StubLLM("not even close to JSON")
+    card = generate_paper_card(
+        "paper text",
+        llm=llm,
+        paper_id="X",
+        header={"title": "T", "year": 2024},
+    )
+    # Header fields preserved.
+    assert card.paper_id == "X"
+    assert card.title == "T"
+    assert card.year == 2024
+    # LLM-extracted fields stay at defaults.
+    assert card.tldr == ""
+    assert card.contributions == []
+    assert card.datasets == []
+
+
+def test_extractor_caps_lists():
+    """Long lists in the LLM output get clipped to _MAX_LIST_ITEMS (12)."""
+    from loom.paper_card import generate_paper_card
+
+    huge = dict(_GOLDEN_CARD_JSON)
+    huge["contributions"] = [f"point {i}" for i in range(50)]
+    llm = StubLLM(json.dumps(huge))
+    card = generate_paper_card("x", llm=llm, paper_id="X", header={})
+    assert len(card.contributions) == 12
+
+
+def test_extractor_workspace_description_in_prompt():
+    """Workspace description should be embedded in the prompt sent to LLM."""
+    from loom.paper_card import generate_paper_card
+
+    seen_prompts: list[str] = []
+
+    class CaptureLLM(StubLLM):
+        def generate(self, prompt, **kw):
+            seen_prompts.append(prompt)
+            return super().generate(prompt, **kw)
+
+    llm = CaptureLLM(json.dumps(_GOLDEN_CARD_JSON))
+    generate_paper_card(
+        "paper", llm=llm, paper_id="X",
+        header={}, workspace_description="Voice agents and turn-taking",
+    )
+    assert any("Voice agents and turn-taking" in p for p in seen_prompts)
+
+
+def test_extractor_string_dataset_coerced_to_object():
+    """The LLM occasionally returns 'datasets': ['MNIST', 'CIFAR'] (strings, not dicts)."""
+    from loom.paper_card import generate_paper_card
+
+    rough = dict(_GOLDEN_CARD_JSON)
+    rough["datasets"] = ["MNIST", "CIFAR-10"]
+    llm = StubLLM(json.dumps(rough))
+    card = generate_paper_card("x", llm=llm, paper_id="X", header={})
+    assert len(card.datasets) == 2
+    assert card.datasets[0].name == "MNIST"
+    assert card.datasets[1].name == "CIFAR-10"
+
+
+# ----- API routes register ---------------------------------------------------
+
+
+def test_paper_card_routes_register():
+    from loom.main import app
+
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert any(p.startswith("/papers/card/build/") for p in paths)
+    assert any(p.startswith("/papers/card/status/") for p in paths)
+    assert any(p.startswith("/papers/card/cached/") for p in paths)

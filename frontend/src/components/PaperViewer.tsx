@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../api/client'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import {
   Loader2, FileText, ExternalLink, Plus, CheckCircle, GitBranch, Sparkles,
 } from 'lucide-react'
+import { PaperCard } from './PaperCard'
 
 interface Props {
   paperId: string
@@ -294,19 +293,21 @@ export function PaperViewer({ paperId, title, onOpenPaper, onOpenCitationTree }:
     )
   }
 
+  // Ingested papers (markdown content): render as a structured PaperCard.
+  // The card lazily builds on first view; subsequent opens are instant.
+  // The full markdown is still available via the "View full text" expander
+  // inside the card.
   return (
     <div className="flex flex-col h-full">
       {actions}
       {graphPanel}
       <div className="flex-1 overflow-y-auto bg-surface-0">
-        <div className="pt-6 pb-12">
-          {header}
-          <article className="wiki-article px-6">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {data.content || ''}
-            </ReactMarkdown>
-          </article>
-        </div>
+        <PaperCard
+          paperId={paperId}
+          title={data.title || title}
+          fullMarkdown={data.content || ''}
+          sourceUrl={data.source_url}
+        />
       </div>
     </div>
   )
