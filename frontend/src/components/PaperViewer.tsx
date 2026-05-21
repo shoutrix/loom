@@ -3,13 +3,14 @@ import { api } from '../api/client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Loader2, FileText, ExternalLink, Plus, CheckCircle, GitBranch,
+  Loader2, FileText, ExternalLink, Plus, CheckCircle, GitBranch, Sparkles,
 } from 'lucide-react'
 
 interface Props {
   paperId: string
   title: string
   onOpenPaper?: (paperId: string, title: string) => void
+  onOpenCitationTree?: (paperId: string, title: string) => void
 }
 
 interface PaperContent {
@@ -46,7 +47,7 @@ function formatSourceLabel(url: string): string {
   }
 }
 
-export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
+export function PaperViewer({ paperId, title, onOpenPaper, onOpenCitationTree }: Props) {
   const [data, setData] = useState<PaperContent | null>(null)
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState<string | null>(null)
@@ -155,6 +156,15 @@ export function PaperViewer({ paperId, title, onOpenPaper }: Props) {
   // itself reads as clean prose with a single prominent source link.
   const actions = (
     <div className="flex items-center justify-end gap-2 px-6 py-2 bg-surface-1 border-b border-surface-3 shrink-0 text-xs">
+      {onOpenCitationTree && (
+        <button
+          onClick={() => onOpenCitationTree(paperId, title)}
+          className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-2 text-text-secondary font-medium rounded hover:bg-surface-3 transition-colors"
+        >
+          <Sparkles size={12} />
+          Citation tree
+        </button>
+      )}
       <button
         onClick={exploreGraph}
         disabled={exploring}

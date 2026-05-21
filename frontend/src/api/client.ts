@@ -64,6 +64,22 @@ export const api = {
   exploreGraphResult: (jobId: string) =>
     get(`/papers/explore-graph/${encodeURIComponent(jobId)}/result`),
 
+  // Citation tree (multi-hop subgraph + tier classification; C6/C7).
+  startCitationTree: (params: {
+    paper_id: string
+    title?: string
+    depth?: number
+    per_hop_cap?: number
+    max_nodes?: number
+    use_llm_tiebreak?: boolean
+  }) => post('/papers/citation-tree/start', params),
+
+  citationTreeStatus: (jobId: string) =>
+    get(`/papers/citation-tree/status/${encodeURIComponent(jobId)}`),
+
+  citationTreeCached: (paperId: string) =>
+    get(`/papers/citation-tree/cached/${encodeURIComponent(paperId)}`),
+
   registry: () => get('/papers/registry'),
 
   // Categorization (Wikipedia-style hierarchical view of the workspace)

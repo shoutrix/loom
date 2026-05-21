@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { SourcesPanel } from './components/SourcesPanel'
 import { AddSourcesModal } from './components/AddSourcesModal'
 import { ChatPanel } from './components/ChatPanel'
+import { CitationTreeView } from './components/CitationTreeView'
 import { GraphView } from './components/GraphView'
 import { NoteEditor } from './components/NoteEditor'
 import { PaperViewer } from './components/PaperViewer'
@@ -79,6 +80,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('notes')
   const [rightView, setRightView] = useState<RightView>('chat')
   const [showAddSources, setShowAddSources] = useState(false)
+  const [citationTreeFor, setCitationTreeFor] = useState<{ paperId: string; title: string } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const [workspaceId, setWorkspaceId] = useState('')
@@ -223,6 +225,7 @@ export default function App() {
                 paperId={currentTab.paperMeta.paper_id}
                 title={currentTab.paperMeta.title}
                 onOpenPaper={(pid, t) => openPaperTab({ paper_id: pid, title: t })}
+                onOpenCitationTree={(pid, t) => setCitationTreeFor({ paperId: pid, title: t })}
               />
             )}
           </div>
@@ -289,6 +292,19 @@ export default function App() {
       {showAddSources && (
         <AddSourcesModal
           onClose={() => { setShowAddSources(false); refresh() }}
+        />
+      )}
+
+      {/* Citation Tree full-screen overlay */}
+      {citationTreeFor && (
+        <CitationTreeView
+          paperId={citationTreeFor.paperId}
+          title={citationTreeFor.title}
+          onClose={() => setCitationTreeFor(null)}
+          onOpenPaper={(pid, t) => {
+            setCitationTreeFor(null)
+            openPaperTab({ paper_id: pid, title: t })
+          }}
         />
       )}
     </div>
