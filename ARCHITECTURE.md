@@ -161,6 +161,42 @@ indexes); add caching later if it ever shows up in profiles.
   `capabilities: ['recommender']`. Idempotent, dry-run by default. Run
   once after upgrading to this branch.
 
+## Citation tree pipeline (loom/citation_tree/)
+
+The "Citation tree" button in PaperViewer triggers a 9-stage
+pipeline whose output is a 5-tier rooted tree (origin → landmark
+→ target → convergence → frontier):
+
+```
+subgraph.build_subgraph         # bounded BFS, S2 references + citations
+       ↓
+signals.compute_signals         # in-degree, methodology, velocity, etc.
+       ↓
+centrality.compute_pagerank     # NetworkX PageRank + time-balanced PR
+       ↓
+convergence.compute_paths       # distinct simple paths from target
+       ↓
+classifier.compute_scores       # composite z-scored influence/origin/frontier
+       ↓
+llm_tiebreak.run_llm_tiebreak   # optional: 5% weight on ambiguous candidates
+       ↓
+classifier.compute_scores       # second pass: folds llm_relevance back in
+       ↓
+classifier.classify_tiers       # picks N per tier, no overlap
+       ↓
+service.save_tree               # data/<ws>/citation_trees/<paper_id>.json
+```
+
+API entrypoints (under `/papers/citation-tree/`):
+- `POST .../start` — kicks off a background build for the active
+  workspace, returns `{job_id}`.
+- `GET .../status/{job_id}` — running/completed/failed + per-stage
+  progress trail.
+- `GET .../cached/{paper_id}` — returns the persisted tree if any.
+
+The full design (signals, weights, tier rules) lives in
+`~/.claude/plans/citation-tree-design.md`.
+
 ## Adding a new provider / retriever / subscriber
 
 - **LLM provider**: implement the `LLMProvider` Protocol in

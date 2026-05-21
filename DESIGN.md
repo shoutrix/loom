@@ -494,6 +494,28 @@ Going forward, the same discipline applies:
   contract without a deprecation cycle (the kept `feed_*` MCP names
   alongside `recommender_*` is the template).
 
+## 8.5 Citation tree (built 2026-05-21)
+
+Multi-hop citation analysis for any target paper. Bounded BFS in
+both directions (default depth 3) builds a 200–500 node subgraph;
+per-node signals (PageRank, time-balanced PageRank, convergence
+counts, S2's `isInfluential`, methodology-citation ratio, citation
+velocity) feed a composite score; the LLM is a 5%-weight
+tie-breaker on ambiguous middle-tier candidates. Output is a
+5-tier tree: origin / landmark / target / convergence / frontier.
+
+Lives in [`loom/citation_tree/`](loom/citation_tree/). Design + phase
+history at `~/.claude/plans/citation-tree-design.md`. The user-facing
+surface is the "Citation tree" button in PaperViewer; the API is
+`POST /papers/citation-tree/start` + `GET /papers/citation-tree/{...}`.
+
+The key principle: a single LLM call is insufficient for influence
+judgment because LLMs don't see the citation graph. Aggregating
+multiple structural signals (PageRank, convergence, methodology
+ratio) and using the LLM only to break ties matches the literature
+on milestone-paper identification (Mariani et al. 2016; the
+"Promise and Pitfalls" paper on PageRank for citations).
+
 ## 9. Future work
 
 Listed in rough priority order.

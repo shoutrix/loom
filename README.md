@@ -16,6 +16,7 @@ Loom is the union of what used to be two repos — `loom` (FastAPI + React UI + 
 | **Ingestion** | Background queue: chunk → enrich → propositions → entity/relationship graph | `loom/ingestion/`, `loom/graph/` |
 | **Chat** | Retriever → LLM, with `retriever_used` surfaced for visibility | `loom/chat/` |
 | **Recommender** | 3-stage personalized ranker (cold → Bayesian LR + Thompson → LightGBM) | `loom/recommender/` |
+| **Citation tree** | Bounded-BFS subgraph + PageRank + convergence + 5-tier classification | `loom/citation_tree/` |
 | **MCP server** | 23 tools (read, research, ingest, recommender, materialize) | `loom/mcp_server/` |
 | **UI** | React + Vite (sources, tabbed editor, graph view, chat, recommender panel) | `loom/frontend/` |
 
