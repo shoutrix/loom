@@ -56,13 +56,18 @@ export function SourcesPanel({ onOpenPaper, onAddSources }: Props) {
     return () => clearInterval(interval)
   }, [])
 
-  const filtered = papers.filter(p =>
+  // Hide papers that were only surfaced by search but never explicitly added
+  // ("shortlisted"). The Sources panel only shows papers the user has chosen
+  // to bring into the workspace.
+  const added = papers.filter(p => p.status !== 'shortlisted')
+
+  const filtered = added.filter(p =>
     !filter || p.title.toLowerCase().includes(filter.toLowerCase())
   )
 
   const sorted = [...filtered].sort((a, b) => {
-    const order: Record<string, number> = { ingesting: 0, queued: 1, ingested: 2, shortlisted: 3, failed: 4 }
-    return (order[a.status] ?? 5) - (order[b.status] ?? 5)
+    const order: Record<string, number> = { ingesting: 0, queued: 1, ingested: 2, failed: 3 }
+    return (order[a.status] ?? 4) - (order[b.status] ?? 4)
   })
 
   return (
