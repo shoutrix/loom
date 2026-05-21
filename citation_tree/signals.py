@@ -63,6 +63,13 @@ class NodeSignals:
     time_balanced_pagerank: float = 0.0
     # Convergence (C4): filled in by compute_convergence_signals.
     convergence_count: int = 0
+    # LLM tie-breaker (C7): topical relevance to the target, 0-10.
+    llm_relevance: float = 0.0
+    # Composite scores + tier (C5): filled in by classify.
+    score_influence: float = 0.0
+    score_origin: float = 0.0
+    score_frontier: float = 0.0
+    tier: str = ""  # "origin" | "landmark" | "target" | "convergence" | "frontier" | ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,6 +90,11 @@ class NodeSignals:
             local_pagerank=float(d.get("local_pagerank", 0.0) or 0.0),
             time_balanced_pagerank=float(d.get("time_balanced_pagerank", 0.0) or 0.0),
             convergence_count=int(d.get("convergence_count", 0) or 0),
+            llm_relevance=float(d.get("llm_relevance", 0.0) or 0.0),
+            score_influence=float(d.get("score_influence", 0.0) or 0.0),
+            score_origin=float(d.get("score_origin", 0.0) or 0.0),
+            score_frontier=float(d.get("score_frontier", 0.0) or 0.0),
+            tier=str(d.get("tier", "") or ""),
         )
 
 
