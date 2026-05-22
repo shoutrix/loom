@@ -483,6 +483,47 @@ def test_new_workspace_and_citation_tools_register():
     mcp = build_mcp()
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
-    assert "list_workspace_papers" in names
+    assert "filter_new_papers" in names
     assert "build_citation_tree" in names
     assert "get_citation_tree" in names
+
+
+def test_filter_new_papers_splits_new_vs_existing(tmp_path):
+    """filter_new_papers returns the subset NOT already in the workspace."""
+    from loom.mcp_server.tools.paper_card_tools import _find_existing
+    from loom.storage.paper_registry import PaperRegistry
+
+    reg = PaperRegistry(tmp_path / "paper_registry.json")
+    reg.register_and_queue("2603.13686")
+    reg.register_and_queue("10.1234/foo")
+    reg.save()
+
+    candidates = [
+        "https://arxiv.org/abs/2603.13686",  # already in
+        "https://arxiv.org/abs/9999.99999",  # new
+        "https://doi.org/10.1234/foo",       # already in (different URL form)
+        "https://doi.org/10.5555/bar",       # new
+        "",                                   # empty input — should be dropped
+        "https://arxiv.org/abs/2603.13686",  # dupe of first input — dropped
+    ]
+
+    new = [c for c in candidates if c.strip() and _find_existing(reg, c) is None]
+    existing = [c for c in candidates if c.strip() and _find_existing(reg, c) is not None]
+    # Dedupe within the input (mirror the MCP tool's behavior).
+    seen, new_unique = set(), []
+    for c in new:
+        if c not in seen:
+            seen.add(c); new_unique.append(c)
+    seen2, existing_unique = set(), []
+    for c in existing:
+        if c not in seen2:
+            seen2.add(c); existing_unique.append(c)
+
+    assert sorted(new_unique) == sorted([
+        "https://arxiv.org/abs/9999.99999",
+        "https://doi.org/10.5555/bar",
+    ])
+    assert sorted(existing_unique) == sorted([
+        "https://arxiv.org/abs/2603.13686",
+        "https://doi.org/10.1234/foo",
+    ])

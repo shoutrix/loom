@@ -644,82 +644,95 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         return {"exists": True, "paper_id": paper_id, "card": card.to_dict()}
 
     @mcp.tool()
-    async def list_workspace_papers(
+    async def filter_new_papers(
         workspace_id: str,
-        status_filter: str = "",
+        candidates: list[str],
     ) -> dict[str, Any]:
         """
-        Enumerate every paper in a workspace's registry, with identifiers.
+        Given a list of candidate paper URLs / arXiv IDs / DOIs, return
+        only the ones NOT already in the workspace.
 
-        Returns a compact list — paper_id, title, status, arxiv_id, doi,
-        source_url — that the calling agent can scan against its own
-        candidate set to avoid analyzing duplicates BEFORE producing a
-        card.
+        This is the dedup primitive for bulk-analyze workflows: agent
+        gathers candidates from its own search + citation_tree results,
+        sends them all here in one call, gets back the subset it actually
+        needs to analyze and submit. Loom does the matching server-side
+        so the agent doesn't have to enumerate the workspace's full
+        registry into its own context.
 
         Args:
             workspace_id: target workspace.
-            status_filter: optional — restrict to one status.
-                Valid values: "shortlisted", "queued", "ingesting",
-                "ingested", "failed". Empty string returns every paper
-                regardless of status.
+            candidates: list of URLs, arXiv IDs, or DOIs. Common shapes
+                that all work: "https://arxiv.org/abs/2603.13686",
+                "2603.13686", "10.1234/foo", "https://doi.org/10.1234/foo".
 
         Returns:
             {
               "workspace_id": ...,
-              "total": <int>,
-              "papers": [
+              "total_input": <int>,
+              "total_new": <int>,
+              "new": [<original candidate string>, ...],
+              "existing": [
                 {
+                  "input": <original candidate>,
                   "paper_id": ...,
+                  "status": <ingested|ingesting|queued|failed|shortlisted>,
                   "title": ...,
-                  "status": ...,
-                  "arxiv_id": ...,
-                  "doi": ...,
-                  "source_url": ...,
-                  "has_card": <bool — whether a card has been persisted>
+                  "has_card": <bool>
                 },
                 ...
               ]
             }
 
-        Use this once at the start of a bulk-analyze workflow, then dedup
-        your candidate list against the returned URLs/IDs in your own
-        context.
+        `new` is what the agent should next analyze + submit. `existing`
+        is informational — the agent can inspect it to decide whether
+        to overwrite cards on already-known papers (by calling
+        submit_paper_card on them, which always overwrites the card
+        without re-queueing ingestion).
         """
         if (err := enforce(workspace_id, write=False)) is not None:
             return err
+        if not isinstance(candidates, list):
+            return {"ok": False, "error": "candidates must be a list of strings"}
 
         ws_settings = state.settings.for_workspace(workspace_id)
         registry = _registry_for(ws_settings.data_dir)
-        all_recs = registry.get_all()
-        if status_filter:
-            all_recs = [r for r in all_recs if r.status == status_filter]
-
         cards_dir = ws_settings.data_dir / "paper_cards"
 
-        def _src(rec) -> str:
-            if rec.arxiv_id:
-                return f"https://arxiv.org/abs/{rec.arxiv_id}"
-            if rec.doi:
-                return f"https://doi.org/{rec.doi}"
-            return ""
+        new_list: list[str] = []
+        existing_list: list[dict[str, Any]] = []
+        seen_inputs: set[str] = set()
 
-        papers = [
-            {
-                "paper_id": rec.paper_id,
-                "title": rec.title or "",
-                "status": rec.status,
-                "arxiv_id": rec.arxiv_id or "",
-                "doi": rec.doi or "",
-                "source_url": _src(rec),
-                "has_card": (cards_dir / f"{rec.paper_id}.json").exists()
-                if cards_dir.exists() else False,
-            }
-            for rec in all_recs
-        ]
+        for raw in candidates:
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            key = raw.strip()
+            # Dedupe within the input itself — if the agent passed the
+            # same URL twice, it's still "one new candidate" at most.
+            if key in seen_inputs:
+                continue
+            seen_inputs.add(key)
+
+            match = _find_existing(registry, key)
+            if match is None:
+                new_list.append(key)
+            else:
+                existing_list.append({
+                    "input": key,
+                    "paper_id": match.paper_id,
+                    "status": match.status,
+                    "title": getattr(match, "title", "") or "",
+                    "has_card": (
+                        (cards_dir / f"{match.paper_id}.json").exists()
+                        if cards_dir.exists() else False
+                    ),
+                })
+
         return {
             "workspace_id": workspace_id,
-            "total": len(papers),
-            "papers": papers,
+            "total_input": len(seen_inputs),
+            "total_new": len(new_list),
+            "new": new_list,
+            "existing": existing_list,
         }
 
     @mcp.tool()
