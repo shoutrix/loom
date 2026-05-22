@@ -13,10 +13,12 @@ EXPECTED_MCP_TOOLS = {
     "write_vault_note", "write_vault_file",
     # Research
     "expand_query", "research_search",
-    # Ingestion
-    "ingest_paper", "ingest_papers", "chat_query",
-    # Paper-card (agent-submitted structured reviews)
-    "submit_paper_card", "get_paper_card",
+    # Chat (uses MCP sampling — agent composes the answer)
+    "chat_query",
+    # Paper submission (fire-and-forget; loom ingests in the background)
+    "submit_paper", "submit_papers",
+    "submit_paper_card", "submit_paper_cards",
+    "get_paper_card",
     # Recommender (legacy feed_* names preserved)
     "feed_create", "feed_more", "rate_item", "refit_ranker",
     "list_feed_items", "get_feed_profile",

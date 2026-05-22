@@ -278,10 +278,11 @@ def read_paper_endpoint(req: PaperReadRequest) -> dict:
 
 @router.post("/queue")
 def queue_papers(req: PaperQueueRequest) -> dict:
-    """Add papers to the background ingestion queue."""
-    from loom.main import get_app_state, get_ingestion_worker
+    """Add papers to the background ingestion queue (active workspace)."""
+    from loom.main import get_app_state, get_ingestion_worker, get_workspace_manager
     state = get_app_state()
     worker = get_ingestion_worker()
+    workspace_id = get_workspace_manager().active_workspace_id
 
     queued = 0
 
@@ -290,7 +291,7 @@ def queue_papers(req: PaperQueueRequest) -> dict:
             rec = state.registry.get(pid)
             if rec:
                 ident = state.registry.get_best_identifier(rec)
-                worker.enqueue(pid, ident)
+                worker.enqueue(workspace_id, pid, ident)
                 queued += 1
 
     for ident in req.identifiers:
@@ -298,7 +299,7 @@ def queue_papers(req: PaperQueueRequest) -> dict:
         rec = state.registry.get(pid)
         if rec:
             best = state.registry.get_best_identifier(rec)
-            worker.enqueue(pid, best)
+            worker.enqueue(workspace_id, pid, best)
             queued += 1
 
     state.registry.save()

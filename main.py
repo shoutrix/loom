@@ -9,11 +9,12 @@ Supports multiple workspaces, each with isolated graph, indexes, vault, and chat
 
 from __future__ import annotations
 
+import datetime
 import json
 import queue
 import shutil
-import datetime
 import threading
+import time
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -52,28 +53,65 @@ class AppState:
     workspace_id: str = "default"
 
 
+_SCAN_INTERVAL_SECONDS = 60.0
+
+
 class IngestionWorker:
-    """Background thread that processes the ingestion queue."""
+    """Background thread that processes queued papers across all workspaces.
+
+    Two ingestion paths feed this worker:
+    - In-process enqueue via ``enqueue(workspace_id, paper_id, identifier)``
+      from the HTTP routes inside the same FastAPI process.
+    - Out-of-process submissions from the MCP server (which writes
+      ``status='queued'`` directly to the paper_registry.json of any
+      workspace). The worker discovers these via a periodic registry
+      scan (``_SCAN_INTERVAL_SECONDS``) and on startup.
+
+    Workspace isolation:
+        Each queued item carries its target ``workspace_id``. The worker
+        loads that workspace's pipeline (via the WorkspaceManager) before
+        processing, so submissions to workspace A don't block on
+        workspace B and don't contaminate the active workspace's state.
+    """
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        # (workspace_id, paper_id, identifier)
+        self._queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self._thread: threading.Thread | None = None
+        self._scan_thread: threading.Thread | None = None
         self._running = False
         self._current: str | None = None
         self._current_title: str | None = None
+        self._current_workspace: str | None = None
+        # Track ids we've already enqueued from a registry scan so we
+        # don't re-queue the same paper on every scan tick.
+        self._enqueued_keys: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
 
-    def start(self, get_state_fn) -> None:
+    def start(self, get_workspace_manager_fn) -> None:
+        """Start the worker.
+
+        Args:
+            get_workspace_manager_fn: a callable returning the
+                ``WorkspaceManager`` singleton. Used by the worker to
+                load arbitrary workspaces by id.
+        """
         self._running = True
-        self._get_state = get_state_fn
+        self._get_mgr = get_workspace_manager_fn
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        print("  [Loom] Ingestion worker started", flush=True)
+        self._scan_thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self._scan_thread.start()
+        print("  [Loom] Ingestion worker started (workspace-aware)", flush=True)
 
     def stop(self) -> None:
         self._running = False
 
-    def enqueue(self, paper_id: str, identifier: str) -> None:
-        self._queue.put((paper_id, identifier))
+    def enqueue(self, workspace_id: str, paper_id: str, identifier: str) -> None:
+        """Append one item to the in-memory queue."""
+        with self._lock:
+            self._enqueued_keys.add((workspace_id, paper_id))
+        self._queue.put((workspace_id, paper_id, identifier))
 
     @property
     def current_paper(self) -> str | None:
@@ -89,24 +127,108 @@ class IngestionWorker:
             "queue_depth": self._queue.qsize(),
             "current_paper": self._current_title,
             "current_paper_id": self._current,
+            "current_workspace": self._current_workspace,
         }
+
+    # ----- scan loop -----
+
+    def _scan_loop(self) -> None:
+        """Periodically scan every workspace's registry for queued papers.
+
+        Picks up submissions made by the MCP server (out-of-process) and
+        any in-process work that didn't go through ``enqueue()``. Runs
+        once immediately on start, then every ``_SCAN_INTERVAL_SECONDS``.
+        """
+        first = True
+        while self._running:
+            try:
+                self._scan_once()
+            except Exception as e:  # pragma: no cover — best-effort
+                print(f"  [Worker] scan error: {e}", flush=True)
+            if first:
+                first = False
+            for _ in range(int(_SCAN_INTERVAL_SECONDS)):
+                if not self._running:
+                    return
+                time.sleep(1.0)
+
+    def _scan_once(self) -> None:
+        """Walk every workspace directory and enqueue queued papers."""
+        try:
+            mgr = self._get_mgr()
+        except Exception:
+            return
+        try:
+            data_root = mgr.base_settings.data_dir
+        except Exception:
+            return
+        if not data_root.exists():
+            return
+        for ws_dir in sorted(data_root.iterdir()):
+            if not ws_dir.is_dir():
+                continue
+            registry_path = ws_dir / "paper_registry.json"
+            if not registry_path.exists():
+                continue
+            try:
+                data = json.loads(registry_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            records = data.get("records") if isinstance(data, dict) else data
+            if not isinstance(records, list):
+                continue
+            ws_id = ws_dir.name
+            for rec in records:
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("status") != "queued":
+                    continue
+                paper_id = str(rec.get("paper_id", ""))
+                identifier = (
+                    rec.get("identifier")
+                    or rec.get("arxiv_id")
+                    or rec.get("doi")
+                    or rec.get("url")
+                    or paper_id
+                )
+                if not paper_id or not identifier:
+                    continue
+                key = (ws_id, paper_id)
+                with self._lock:
+                    if key in self._enqueued_keys:
+                        continue
+                    self._enqueued_keys.add(key)
+                self._queue.put((ws_id, paper_id, str(identifier)))
+                print(f"  [Worker] picked up queued paper {paper_id} from {ws_id}", flush=True)
+
+    # ----- consumer loop -----
 
     def _run(self) -> None:
         while self._running:
             try:
-                paper_id, identifier = self._queue.get(timeout=2.0)
+                workspace_id, paper_id, identifier = self._queue.get(timeout=2.0)
             except queue.Empty:
                 continue
 
-            state = self._get_state()
+            try:
+                mgr = self._get_mgr()
+                state = mgr.load_workspace(workspace_id)
+            except Exception as e:
+                print(f"  [Worker] could not load workspace {workspace_id}: {e}", flush=True)
+                with self._lock:
+                    self._enqueued_keys.discard((workspace_id, paper_id))
+                self._queue.task_done()
+                continue
+
             self._current = paper_id
             self._current_title = paper_id
+            self._current_workspace = workspace_id
             state.registry.set_status(paper_id, "ingesting")
             state.registry.save()
 
             try:
                 from loom.tools.paper_read import read_and_ingest_paper
-                print(f"  [Worker] Ingesting {identifier} ...", flush=True)
+                print(f"  [Worker] Ingesting {identifier} in workspace {workspace_id} ...", flush=True)
                 result = read_and_ingest_paper(state.pipeline, identifier)
 
                 if result.error:
@@ -130,6 +252,7 @@ class IngestionWorker:
             state.registry.save()
             self._current = None
             self._current_title = None
+            self._current_workspace = None
             self._queue.task_done()
 
 
@@ -470,14 +593,17 @@ async def lifespan(app: FastAPI):
     print(f"  [Loom] Graph: {active.graph.stats()}")
     print(f"  [Loom] Models: Pro={base_settings.llm.pro_model}, Flash={base_settings.llm.flash_model}")
 
-    _ingestion_worker.start(lambda: _manager.active)
+    # Pass a manager-accessor instead of an active-state-accessor so the
+    # worker can resolve any workspace by id (MCP submissions may target
+    # workspaces that aren't currently active).
+    _ingestion_worker.start(lambda: _manager)
 
-    queued = active.registry.get_queued()
-    if queued:
-        print(f"  [Loom] Resuming {len(queued)} queued papers...")
-        for rec in queued:
-            ident = active.registry.get_best_identifier(rec)
-            _ingestion_worker.enqueue(rec.paper_id, ident)
+    # The worker's periodic scan picks up queued papers from every
+    # workspace's registry, so we don't need to seed the queue with the
+    # active workspace's queued items here — the scan does it.
+    queued_active = active.registry.get_queued()
+    if queued_active:
+        print(f"  [Loom] {len(queued_active)} queued paper(s) in active workspace — worker scan will pick up these and any in other workspaces")
 
     yield
     if _manager:

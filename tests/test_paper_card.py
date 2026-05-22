@@ -276,7 +276,7 @@ def test_submit_paper_card_persists(tmp_path):
         "doi": "",
     }
     card = _coerce_card_input(
-        "ARXIV:1706.03762", agent_input, header_defaults=header_defaults,
+        "ARXIV:1706.03762", agent_input, registry_header=header_defaults,
     )
 
     # Header filled from registry defaults.
@@ -312,7 +312,7 @@ def test_submit_paper_card_agent_overrides_header():
         "arxiv_id": "",
         "doi": "",
     }
-    card = _coerce_card_input("p1", agent_input, header_defaults=header_defaults)
+    card = _coerce_card_input("p1", agent_input, registry_header=header_defaults)
     assert card.title == "Newer title from agent"
     assert card.venue == "Workshop"
     # Year not in agent input -> fallback to registry's year.
@@ -325,7 +325,7 @@ def test_submit_paper_card_coerces_string_datasets():
     from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
 
     agent_input = {"tldr": "x", "datasets": ["MNIST", "CIFAR-10"]}
-    card = _coerce_card_input("p", agent_input, header_defaults={})
+    card = _coerce_card_input("p", agent_input, registry_header={})
     assert len(card.datasets) == 2
     assert card.datasets[0].name == "MNIST"
 
@@ -335,7 +335,7 @@ def test_submit_paper_card_handles_missing_fields():
     from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
 
     agent_input = {"tldr": "only a tldr"}
-    card = _coerce_card_input("p1", agent_input, header_defaults={})
+    card = _coerce_card_input("p1", agent_input, registry_header={})
     assert card.paper_id == "p1"
     assert card.tldr == "only a tldr"
     assert card.problem == ""
@@ -361,3 +361,72 @@ def test_get_paper_card_returns_exists_false_when_missing(tmp_path, monkeypatch)
     """get_paper_card returns {exists: false} for unknown papers."""
     from loom.paper_card import load_card
     assert load_card(tmp_path, "never-submitted") is None
+
+
+# ----- new submission semantics ---------------------------------------------
+
+
+def test_derive_url_prefers_source_url():
+    from loom.mcp_server.tools.paper_card_tools import _derive_url
+
+    assert _derive_url({"source_url": "https://example.test/p"}) == "https://example.test/p"
+
+
+def test_derive_url_falls_back_to_arxiv_id():
+    from loom.mcp_server.tools.paper_card_tools import _derive_url
+
+    assert _derive_url({"arxiv_id": "2603.13686"}) == "https://arxiv.org/abs/2603.13686"
+
+
+def test_derive_url_falls_back_to_doi():
+    from loom.mcp_server.tools.paper_card_tools import _derive_url
+
+    assert _derive_url({"doi": "10.1234/foo"}) == "https://doi.org/10.1234/foo"
+
+
+def test_derive_url_returns_none_when_nothing_identifies():
+    from loom.mcp_server.tools.paper_card_tools import _derive_url
+
+    assert _derive_url({"title": "no url here"}) is None
+    assert _derive_url({}) is None
+
+
+def test_max_batch_size_constant():
+    """submit_papers and submit_paper_cards must cap at the same value."""
+    from loom.mcp_server.tools.paper_card_tools import MAX_BATCH_SIZE
+
+    assert MAX_BATCH_SIZE == 10
+
+
+def test_new_submission_tools_register():
+    """Smoke: submit_paper, submit_papers, submit_paper_cards register."""
+    import asyncio
+
+    from loom.mcp_server.server import build_mcp
+
+    mcp = build_mcp()
+    tools = asyncio.run(mcp.list_tools())
+    names = {t.name for t in tools}
+    assert "submit_paper" in names
+    assert "submit_papers" in names
+    assert "submit_paper_card" in names
+    assert "submit_paper_cards" in names
+    assert "get_paper_card" in names
+    # Old ingest_paper / ingest_papers MUST be gone now.
+    assert "ingest_paper" not in names
+    assert "ingest_papers" not in names
+
+
+def test_ingestion_worker_workspace_aware():
+    """The IngestionWorker enqueue and start now require workspace context."""
+    import inspect
+
+    from loom.main import IngestionWorker
+
+    sig = inspect.signature(IngestionWorker.enqueue)
+    params = list(sig.parameters.keys())
+    assert params == ["self", "workspace_id", "paper_id", "identifier"]
+
+    sig_start = inspect.signature(IngestionWorker.start)
+    params_start = list(sig_start.parameters.keys())
+    assert "get_workspace_manager_fn" in params_start

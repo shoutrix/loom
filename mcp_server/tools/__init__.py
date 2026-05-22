@@ -7,7 +7,7 @@ from mcp.server.fastmcp import FastMCP
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
 from loom.mcp_server.tools import (
-    ingestion,
+    chat_tools,
     paper_card_tools,
     recommender,
     research,
@@ -23,6 +23,6 @@ def register_all(
     """Register every MCP tool group on the given FastMCP instance."""
     shared.register(mcp, state)
     research.register(mcp, state)
-    ingestion.register(mcp, state, loader)
+    chat_tools.register(mcp, state, loader)
     paper_card_tools.register(mcp, state, loader)
     recommender.register(mcp, state, loader)
