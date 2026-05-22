@@ -248,7 +248,130 @@ def _registry_header(registry: PaperRegistry, paper_id: str) -> dict[str, Any]:
 # ----- registration ----------------------------------------------------------
 
 
+def _sanitize_workspace_id(raw: str) -> str:
+    """Mirror api/routes_workspaces._sanitize_workspace_id so the MCP tool
+    accepts exactly the same shapes as the HTTP route."""
+    import re
+    cleaned = re.sub(r"[^\w\-]", "", (raw or "").strip().lower())
+    return cleaned[:64]
+
+
 def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
+
+    @mcp.tool()
+    async def create_workspace(
+        workspace_id: str,
+        description: str = "",
+        display_name: str = "",
+    ) -> dict[str, Any]:
+        """
+        Create a new workspace in loom.
+
+        Use this as the explicit first step before bulk-submitting papers
+        — it makes the agent's intent clear and avoids accidentally
+        creating workspaces from typo'd identifiers in later submit_*
+        calls. (Submitting to a non-existent workspace will still
+        auto-create it for safety, but you should NOT rely on that.)
+
+        Args:
+            workspace_id: identifier for the workspace. Sanitized to
+                lowercase alphanumeric + hyphens + underscores; 64 char
+                max. Examples: "agent-infra-reading", "voice_agents_2026".
+            description: optional 1-2 sentence description of what this
+                workspace is for. Stored on workspace.json and shown in
+                the UI; also fed to loom's lazy paper-card extractor as
+                workspace_relevance context.
+            display_name: optional human-readable name. Defaults to the
+                workspace_id.
+
+        Returns:
+            {
+              "ok": True,
+              "workspace_id": <sanitized id>,
+              "action": "created" | "already_exists",
+              "display_name": ...,
+              "description": ...,
+              "data_dir": <absolute path>,
+              "vault_dir": <absolute path>,
+              "message": ...
+            }
+
+        Idempotent: if the workspace already exists, the call succeeds
+        with action="already_exists" and the existing metadata is
+        returned without modification.
+        """
+        if not isinstance(workspace_id, str) or not workspace_id.strip():
+            return {"ok": False, "error": "workspace_id must be a non-empty string"}
+
+        ws_id = _sanitize_workspace_id(workspace_id)
+        if not ws_id:
+            return {
+                "ok": False,
+                "error": (
+                    f"workspace_id {workspace_id!r} contains no valid "
+                    f"characters after sanitization "
+                    f"(allowed: alphanumeric, hyphens, underscores)"
+                ),
+            }
+
+        # Permission gate: write on the new workspace id. Subscribers
+        # restricted to a fixed workspace list cannot create new ones.
+        if (err := enforce(ws_id, write=True)) is not None:
+            return err
+
+        ws_settings = state.settings.for_workspace(ws_id)
+        meta_path = ws_settings.data_dir / "workspace.json"
+        already_exists = meta_path.exists()
+
+        ws_settings.ensure_dirs()  # idempotent; creates data + vault dirs
+
+        import datetime
+        import json
+
+        if already_exists:
+            try:
+                existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing_meta = {}
+            return {
+                "ok": True,
+                "workspace_id": ws_id,
+                "action": "already_exists",
+                "display_name": existing_meta.get("display_name", ws_id),
+                "description": existing_meta.get("description", ""),
+                "data_dir": str(ws_settings.data_dir),
+                "vault_dir": str(ws_settings.vault_dir),
+                "message": (
+                    f"Workspace {ws_id!r} already exists. Returning "
+                    f"existing metadata; no changes made."
+                ),
+            }
+
+        meta = {
+            "workspace_id": ws_id,
+            "display_name": display_name.strip() or ws_id,
+            "description": description.strip(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds",
+            ),
+            "capabilities": [],
+        }
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        return {
+            "ok": True,
+            "workspace_id": ws_id,
+            "action": "created",
+            "display_name": meta["display_name"],
+            "description": meta["description"],
+            "data_dir": str(ws_settings.data_dir),
+            "vault_dir": str(ws_settings.vault_dir),
+            "message": (
+                f"Workspace {ws_id!r} created. You can now submit papers "
+                f"to it via submit_paper / submit_paper_card."
+            ),
+        }
+
 
     @mcp.tool()
     async def submit_paper(

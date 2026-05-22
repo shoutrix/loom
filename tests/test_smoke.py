@@ -18,6 +18,8 @@ EXPECTED_MCP_TOOLS = {
     # Bulk-analyze workflow primitives
     "filter_new_papers",
     "build_citation_tree", "get_citation_tree",
+    # Workspace lifecycle
+    "create_workspace",
 }
 
 # Tools that MUST NOT appear on the MCP surface. The underlying code stays

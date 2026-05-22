@@ -488,6 +488,31 @@ def test_new_workspace_and_citation_tools_register():
     assert "get_citation_tree" in names
 
 
+def test_sanitize_workspace_id():
+    """Mirror the HTTP route's sanitizer behavior."""
+    from loom.mcp_server.tools.paper_card_tools import _sanitize_workspace_id
+
+    assert _sanitize_workspace_id("Agent Infra Reading") == "agentinfrareading"
+    assert _sanitize_workspace_id("agent-infra-reading") == "agent-infra-reading"
+    assert _sanitize_workspace_id("voice_agents_2026") == "voice_agents_2026"
+    assert _sanitize_workspace_id("  Spaces  ") == "spaces"
+    assert _sanitize_workspace_id("dots.are.stripped") == "dotsarestripped"
+    assert _sanitize_workspace_id("a" * 100) == "a" * 64  # 64-char cap
+    assert _sanitize_workspace_id("") == ""
+    assert _sanitize_workspace_id("!!!") == ""
+
+
+def test_create_workspace_registers_on_mcp():
+    """The new create_workspace MCP tool registers on the server."""
+    import asyncio
+    from loom.mcp_server.server import build_mcp
+
+    mcp = build_mcp()
+    tools = asyncio.run(mcp.list_tools())
+    names = {t.name for t in tools}
+    assert "create_workspace" in names
+
+
 def test_filter_new_papers_splits_new_vs_existing(tmp_path):
     """filter_new_papers returns the subset NOT already in the workspace."""
     from loom.mcp_server.tools.paper_card_tools import _find_existing
