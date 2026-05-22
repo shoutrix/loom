@@ -15,6 +15,8 @@ EXPECTED_MCP_TOOLS = {
     "expand_query", "research_search",
     # Ingestion
     "ingest_paper", "ingest_papers", "chat_query",
+    # Paper-card (agent-submitted structured reviews)
+    "submit_paper_card", "get_paper_card",
     # Recommender (legacy feed_* names preserved)
     "feed_create", "feed_more", "rate_item", "refit_ranker",
     "list_feed_items", "get_feed_profile",

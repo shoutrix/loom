@@ -37,7 +37,18 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
             identifier: arXiv ID (e.g. "2401.12345"), DOI, "s2:<id>", or URL
 
         Runs in the foreground (~30 LLM round-trips per paper). Updates the
-        workspace's graph + indexes + paper registry on completion.
+        workspace's graph + indexes + paper registry on completion. Returns
+        {ok, paper_id, doc_id, title, source_type, stats}.
+
+        IMPORTANT — workflow note for the calling agent:
+        After this returns successfully, you SHOULD immediately call
+        `submit_paper_card(workspace_id, paper_id, card)` with a structured
+        13-field review of the paper you just read. You already have the
+        paper in context, so producing the card is cheap. Doing it now
+        avoids a second LLM call later (loom will otherwise re-extract
+        the card via Gemini when the user opens the paper in the UI).
+
+        See `submit_paper_card` for the required card schema.
         """
         if (err := enforce(workspace_id, write=True)) is not None:
             return err

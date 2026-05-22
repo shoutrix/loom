@@ -236,3 +236,128 @@ def test_paper_card_routes_register():
     assert any(p.startswith("/papers/card/build/") for p in paths)
     assert any(p.startswith("/papers/card/status/") for p in paths)
     assert any(p.startswith("/papers/card/cached/") for p in paths)
+
+
+# ----- MCP submit_paper_card / get_paper_card --------------------------------
+
+
+def test_submit_paper_card_persists(tmp_path):
+    """End-to-end: build a PaperCard from an agent-submitted dict and
+    persist it via the same save_card helper the MCP tool uses."""
+    from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
+    from loom.paper_card import card_path, load_card, save_card
+
+    agent_input = {
+        "tldr": "Transformers replace recurrence with attention.",
+        "problem": "RNNs are slow.",
+        "approach": "Multi-head self-attention.",
+        "contributions": ["Self-attention SOTA", "Multi-head formulation"],
+        "datasets": [
+            {"name": "WMT'14 En-De", "size": "4.5M pairs", "type": "translation"},
+        ],
+        "setup": "Compared against ByteNet and ConvS2S.",
+        "results": ["28.4 BLEU on En-De"],
+        "conclusion": "Attention alone is sufficient.",
+        "strengths": ["Parallelisable"],
+        "limitations": ["Quadratic memory"],
+        "related_work": [{"title": "Seq2Seq", "why": "Baseline."}],
+        "workspace_relevance": "Foundational for the transformers workspace.",
+        "open_questions": ["Long context?"],
+        # extra fields beyond the schema — should be silently ignored
+        "made_up_field": "should not crash",
+    }
+    header_defaults = {
+        "title": "Attention Is All You Need",
+        "authors": ["Vaswani"],
+        "venue": "NeurIPS",
+        "year": 2017,
+        "source_url": "https://arxiv.org/abs/1706.03762",
+        "arxiv_id": "1706.03762",
+        "doi": "",
+    }
+    card = _coerce_card_input(
+        "ARXIV:1706.03762", agent_input, header_defaults=header_defaults,
+    )
+
+    # Header filled from registry defaults.
+    assert card.title == "Attention Is All You Need"
+    assert card.authors == ["Vaswani"]
+    assert card.year == 2017
+    # 13 review fields populated.
+    assert card.tldr.startswith("Transformers")
+    assert len(card.contributions) == 2
+    assert len(card.datasets) == 1
+    assert card.datasets[0].size == "4.5M pairs"
+    # Roundtrip through disk.
+    save_card(tmp_path, card)
+    back = load_card(tmp_path, "ARXIV:1706.03762")
+    assert back is not None
+    assert back.tldr == card.tldr
+
+
+def test_submit_paper_card_agent_overrides_header():
+    """Header fields in the agent's input override registry defaults."""
+    from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
+
+    agent_input = {
+        "title": "Newer title from agent",
+        "venue": "Workshop",
+        "tldr": "x",
+    }
+    header_defaults = {
+        "title": "Stale registry title",
+        "venue": "Old venue",
+        "year": 2024,
+        "source_url": "",
+        "arxiv_id": "",
+        "doi": "",
+    }
+    card = _coerce_card_input("p1", agent_input, header_defaults=header_defaults)
+    assert card.title == "Newer title from agent"
+    assert card.venue == "Workshop"
+    # Year not in agent input -> fallback to registry's year.
+    assert card.year == 2024
+
+
+def test_submit_paper_card_coerces_string_datasets():
+    """The agent sometimes returns 'datasets': ['MNIST', 'CIFAR'] (strings).
+    The coercion path that the Gemini extractor uses should also work here."""
+    from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
+
+    agent_input = {"tldr": "x", "datasets": ["MNIST", "CIFAR-10"]}
+    card = _coerce_card_input("p", agent_input, header_defaults={})
+    assert len(card.datasets) == 2
+    assert card.datasets[0].name == "MNIST"
+
+
+def test_submit_paper_card_handles_missing_fields():
+    """Sparse agent input still produces a card; missing fields stay empty."""
+    from loom.mcp_server.tools.paper_card_tools import _coerce_card_input
+
+    agent_input = {"tldr": "only a tldr"}
+    card = _coerce_card_input("p1", agent_input, header_defaults={})
+    assert card.paper_id == "p1"
+    assert card.tldr == "only a tldr"
+    assert card.problem == ""
+    assert card.contributions == []
+    assert card.datasets == []
+    assert card.model == "agent-submitted"
+
+
+def test_submit_paper_card_tools_register_on_mcp():
+    """Smoke: the new MCP tools register on the server."""
+    import asyncio
+
+    from loom.mcp_server.server import build_mcp
+
+    mcp = build_mcp()
+    tools = asyncio.run(mcp.list_tools())
+    names = {t.name for t in tools}
+    assert "submit_paper_card" in names
+    assert "get_paper_card" in names
+
+
+def test_get_paper_card_returns_exists_false_when_missing(tmp_path, monkeypatch):
+    """get_paper_card returns {exists: false} for unknown papers."""
+    from loom.paper_card import load_card
+    assert load_card(tmp_path, "never-submitted") is None
