@@ -43,6 +43,7 @@ Processing model:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,55 @@ def _registry_for(workspace_data_dir: Path) -> PaperRegistry:
     """Open / create the paper_registry.json for a workspace."""
     workspace_data_dir.mkdir(parents=True, exist_ok=True)
     return PaperRegistry(workspace_data_dir / "paper_registry.json")
+
+
+def _find_existing(registry: PaperRegistry, url: str) -> Any:
+    """Return the existing PaperRecord matching this URL/arxiv_id/doi, or None.
+
+    Match priority: source_url → arxiv_id (extracted from URL) → doi.
+    This is the dedup primitive — callers use it to detect re-submissions
+    BEFORE register_and_queue, which would otherwise overwrite the status
+    of an already-ingested paper.
+    """
+    import re
+
+    url = (url or "").strip()
+    if not url:
+        return None
+
+    # Extract identifiers from the URL.
+    arxiv_match = re.search(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", url)
+    arxiv_id = arxiv_match.group(1) if arxiv_match else None
+    if not arxiv_id and re.fullmatch(r"\d{4}\.\d{4,5}", url):
+        arxiv_id = url
+
+    doi_match = re.search(r"doi\.org/(.+)$", url)
+    doi = doi_match.group(1) if doi_match else None
+    if not doi and url.startswith("10."):
+        doi = url
+
+    for rec in registry.get_all():
+        if arxiv_id and getattr(rec, "arxiv_id", "") == arxiv_id:
+            return rec
+        if doi and getattr(rec, "doi", "") == doi:
+            return rec
+    return None
+
+
+def _existing_response(rec, action: str, *, message: str | None = None) -> dict[str, Any]:
+    """Build a uniform 'already exists' response for submit_* tools."""
+    return {
+        "ok": True,
+        "paper_id": rec.paper_id,
+        "status": rec.status,
+        "action": action,
+        "title": getattr(rec, "title", "") or "",
+        "ingested_at": getattr(rec, "ingested_at", "") or "",
+        "message": message or (
+            f"Paper is already in this workspace with status={rec.status!r}. "
+            f"No re-submission needed."
+        ),
+    }
 
 
 def _derive_url(card: dict[str, Any]) -> str | None:
@@ -235,6 +285,14 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
 
         ws_settings = state.settings.for_workspace(workspace_id)
         registry = _registry_for(ws_settings.data_dir)
+
+        # Dedup: if a record for this URL already exists, surface its
+        # current status rather than re-queueing. Skip-noop for ingested
+        # papers; idempotent for queued/ingesting; allow retry for failed.
+        existing = _find_existing(registry, url.strip())
+        if existing and existing.status in ("ingested", "ingesting", "queued"):
+            return _existing_response(existing, action="skipped")
+
         paper_id = registry.register_and_queue(url.strip())
         registry.save()
 
@@ -243,6 +301,7 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
             "paper_id": paper_id,
             "workspace_id": workspace_id,
             "status": "queued",
+            "action": "queued",
             "message": (
                 "Paper queued. Loom's background worker will pick it up "
                 "within 60 seconds and ingest it (~30-60s of processing). "
@@ -280,17 +339,31 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         registry = _registry_for(ws_settings.data_dir)
 
         submissions: list[dict[str, Any]] = []
+        skipped = 0
+        queued = 0
         for raw in urls:
             if not isinstance(raw, str) or not raw.strip():
                 submissions.append({"url": raw, "error": "empty or non-string url"})
                 continue
             try:
+                existing = _find_existing(registry, raw.strip())
+                if existing and existing.status in ("ingested", "ingesting", "queued"):
+                    submissions.append({
+                        "url": raw.strip(),
+                        "paper_id": existing.paper_id,
+                        "status": existing.status,
+                        "action": "skipped",
+                    })
+                    skipped += 1
+                    continue
                 pid = registry.register_and_queue(raw.strip())
                 submissions.append({
                     "url": raw.strip(),
                     "paper_id": pid,
                     "status": "queued",
+                    "action": "queued",
                 })
+                queued += 1
             except Exception as e:
                 submissions.append({"url": raw, "error": f"{type(e).__name__}: {e}"})
         registry.save()
@@ -298,6 +371,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         return {
             "ok": True,
             "total": len(submissions),
+            "queued": queued,
+            "skipped": skipped,
             "workspace_id": workspace_id,
             "submissions": submissions,
         }
@@ -401,7 +476,24 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
 
         ws_settings = state.settings.for_workspace(workspace_id)
         registry = _registry_for(ws_settings.data_dir)
-        paper_id = registry.register_and_queue(url)
+
+        # Dedup: if the paper is already in the registry, ALWAYS overwrite
+        # the card (the agent's new analysis is presumably newer/better)
+        # but do NOT re-queue an already-ingested paper.
+        existing = _find_existing(registry, url)
+        if existing:
+            paper_id = existing.paper_id
+            action_for_paper = (
+                "skipped" if existing.status in ("ingested", "ingesting", "queued")
+                else "queued"
+            )
+            if action_for_paper == "queued":
+                registry.register_and_queue(url)
+            existing_status_for_card = existing.status
+        else:
+            paper_id = registry.register_and_queue(url)
+            action_for_paper = "queued"
+            existing_status_for_card = "queued"
         registry.save()
 
         header = _registry_header(registry, paper_id)
@@ -421,15 +513,19 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
             "ok": True,
             "paper_id": paper_id,
             "workspace_id": workspace_id,
-            "status": "queued",
+            "status": existing_status_for_card,
+            "action": (
+                "card_updated" if existing and action_for_paper == "skipped"
+                else action_for_paper
+            ),
             "card_saved": True,
             "fields_filled": fields_filled,
             "total_fields": 13,
             "message": (
-                f"Card persisted ({fields_filled}/13 fields); paper queued "
-                f"for background ingestion. The UI will render your card "
-                f"instantly when the user opens this paper — loom will "
-                f"NOT run its own card extractor."
+                f"Card persisted ({fields_filled}/13 fields). "
+                + ("Paper was already in the workspace — only the card was updated; ingestion not re-triggered."
+                   if existing and action_for_paper == "skipped"
+                   else "Paper queued for background ingestion.")
             ),
         }
 
@@ -482,7 +578,22 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
                 })
                 continue
             try:
-                paper_id = registry.register_and_queue(url)
+                existing = _find_existing(registry, url)
+                if existing:
+                    paper_id = existing.paper_id
+                    item_action = (
+                        "card_updated"
+                        if existing.status in ("ingested", "ingesting", "queued")
+                        else "queued"
+                    )
+                    if item_action == "queued":
+                        registry.register_and_queue(url)
+                    item_status = existing.status
+                else:
+                    paper_id = registry.register_and_queue(url)
+                    item_action = "queued"
+                    item_status = "queued"
+
                 header = _registry_header(registry, paper_id)
                 built = _coerce_card_input(paper_id, card, registry_header=header)
                 save_card(ws_settings.data_dir, built)
@@ -490,7 +601,8 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
                     "index": i,
                     "url": url,
                     "paper_id": paper_id,
-                    "status": "queued",
+                    "status": item_status,
+                    "action": item_action,
                     "card_saved": True,
                 })
                 succeeded += 1
@@ -530,3 +642,280 @@ def register(mcp: FastMCP, state: MCPState, loader: MCPWorkspaceLoader) -> None:
         if card is None:
             return {"exists": False, "paper_id": paper_id}
         return {"exists": True, "paper_id": paper_id, "card": card.to_dict()}
+
+    @mcp.tool()
+    async def list_workspace_papers(
+        workspace_id: str,
+        status_filter: str = "",
+    ) -> dict[str, Any]:
+        """
+        Enumerate every paper in a workspace's registry, with identifiers.
+
+        Returns a compact list — paper_id, title, status, arxiv_id, doi,
+        source_url — that the calling agent can scan against its own
+        candidate set to avoid analyzing duplicates BEFORE producing a
+        card.
+
+        Args:
+            workspace_id: target workspace.
+            status_filter: optional — restrict to one status.
+                Valid values: "shortlisted", "queued", "ingesting",
+                "ingested", "failed". Empty string returns every paper
+                regardless of status.
+
+        Returns:
+            {
+              "workspace_id": ...,
+              "total": <int>,
+              "papers": [
+                {
+                  "paper_id": ...,
+                  "title": ...,
+                  "status": ...,
+                  "arxiv_id": ...,
+                  "doi": ...,
+                  "source_url": ...,
+                  "has_card": <bool — whether a card has been persisted>
+                },
+                ...
+              ]
+            }
+
+        Use this once at the start of a bulk-analyze workflow, then dedup
+        your candidate list against the returned URLs/IDs in your own
+        context.
+        """
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
+
+        ws_settings = state.settings.for_workspace(workspace_id)
+        registry = _registry_for(ws_settings.data_dir)
+        all_recs = registry.get_all()
+        if status_filter:
+            all_recs = [r for r in all_recs if r.status == status_filter]
+
+        cards_dir = ws_settings.data_dir / "paper_cards"
+
+        def _src(rec) -> str:
+            if rec.arxiv_id:
+                return f"https://arxiv.org/abs/{rec.arxiv_id}"
+            if rec.doi:
+                return f"https://doi.org/{rec.doi}"
+            return ""
+
+        papers = [
+            {
+                "paper_id": rec.paper_id,
+                "title": rec.title or "",
+                "status": rec.status,
+                "arxiv_id": rec.arxiv_id or "",
+                "doi": rec.doi or "",
+                "source_url": _src(rec),
+                "has_card": (cards_dir / f"{rec.paper_id}.json").exists()
+                if cards_dir.exists() else False,
+            }
+            for rec in all_recs
+        ]
+        return {
+            "workspace_id": workspace_id,
+            "total": len(papers),
+            "papers": papers,
+        }
+
+    @mcp.tool()
+    async def build_citation_tree(
+        workspace_id: str,
+        paper_id_or_url: str,
+        depth: int = 3,
+        per_hop_cap: int = 80,
+        max_nodes: int = 500,
+        use_llm: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Build (or rebuild) the citation tree for a paper. BLOCKING — runs
+        the full pipeline end-to-end and returns the result.
+
+        This is the primary tool for the "find everything related to this
+        paper" workflow. After it returns, the agent has the full ranked
+        candidate list to analyze + submit downstream.
+
+        Pipeline (loom-internal — agent doesn't need to know):
+          1. Bounded BFS on S2 references + citations (depth, per_hop_cap).
+          2. Per-node signals (citation count, methodology ratio, etc.).
+          3. PageRank + time-balanced PageRank.
+          4. Convergence path counting.
+          5. Composite scoring + 5-tier classification.
+          6. (Optional) LLM pass using loom's server-side model with the
+             full available context window — fills Gemini's 1M-token
+             window with all candidate abstracts.
+
+        Args:
+            workspace_id: target workspace (where to persist the tree).
+            paper_id_or_url: the paper to root the tree at. URL, arxiv
+                ID, DOI, or s2:<id> all work. The paper does NOT have to
+                already be in the workspace.
+            depth: hops in each direction. Default 3.
+            per_hop_cap: max papers consumed into the next frontier per
+                hop. Default 80.
+            max_nodes: hard ceiling on subgraph size. Default 500.
+            use_llm: whether to run the LLM classification pass. Costs
+                ~$2-5 in Gemini tokens. Strongly recommended (default).
+
+        Wall-clock: 30-180 seconds depending on depth and S2 latency.
+
+        Returns:
+            {
+              "ok": True,
+              "target": {"paper_id", "title", "year", ...},
+              "tiers": {
+                "origin":      [paper_ids…],
+                "landmark":    [...],
+                "target":      [target_paper_id],
+                "convergence": [...],
+                "frontier":    [...]
+              },
+              "all_candidates": [
+                # Full ranked list — what the agent uses for downstream
+                # analysis. Score-sorted desc.
+                {"paper_id", "title", "year", "score_influence",
+                 "tier", "citation_count", "convergence_count", ...},
+                ...
+              ],
+              "stats": {wall_time_total_seconds, total_nodes, ...},
+              "path": "<on-disk location of the persisted JSON>"
+            }
+        """
+        if (err := enforce(workspace_id, write=True)) is not None:
+            return err
+        if not isinstance(paper_id_or_url, str) or not paper_id_or_url.strip():
+            return {"ok": False, "error": "paper_id_or_url must be a non-empty string"}
+
+        from loom.citation_tree import BuildParams, build_citation_tree, tree_path
+        from loom.config import get_settings
+        from loom.llm import make_llm_provider
+        from loom.tools.paper_search.sources import SemanticScholarClient
+
+        settings = get_settings()
+        ws_settings = settings.for_workspace(workspace_id)
+        ws_settings.ensure_dirs()
+
+        s2 = SemanticScholarClient(api_key=settings.semantic_scholar_api_key or None)
+        llm = make_llm_provider(settings, workspace_id=workspace_id) if use_llm else None
+
+        try:
+            tree = await asyncio.to_thread(
+                build_citation_tree,
+                paper_id_or_url.strip(),
+                ws_settings.data_dir,
+                s2_client=s2,
+                llm=llm,
+                params=BuildParams(
+                    depth=depth,
+                    per_hop_cap=per_hop_cap,
+                    max_nodes=max_nodes,
+                    use_llm_tiebreak=use_llm,
+                ),
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+        # Build a compact ranked candidate list, sorted by score_influence desc.
+        candidates: list[dict[str, Any]] = []
+        if tree.subgraph is not None:
+            for pid, node in tree.subgraph.nodes.items():
+                sig = tree.signals.get(pid)
+                if sig is None:
+                    continue
+                src = ""
+                if node.arxiv_id:
+                    src = f"https://arxiv.org/abs/{node.arxiv_id}"
+                elif node.doi:
+                    src = f"https://doi.org/{node.doi}"
+                elif node.url:
+                    src = node.url
+                candidates.append({
+                    "paper_id": pid,
+                    "title": node.title,
+                    "year": node.year,
+                    "venue": node.venue,
+                    "source_url": src,
+                    "arxiv_id": node.arxiv_id,
+                    "doi": node.doi,
+                    "citation_count": node.citation_count,
+                    "influential_citation_count": node.influential_citation_count,
+                    "score_influence": sig.score_influence,
+                    "score_origin": sig.score_origin,
+                    "score_frontier": sig.score_frontier,
+                    "local_pagerank": sig.local_pagerank,
+                    "convergence_count": sig.convergence_count,
+                    "tier": sig.tier,
+                })
+        candidates.sort(key=lambda c: c["score_influence"], reverse=True)
+
+        return {
+            "ok": True,
+            "target": tree.target,
+            "tiers": tree.tiers,
+            "all_candidates": candidates,
+            "stats": tree.stats,
+            "path": str(tree_path(ws_settings.data_dir, tree.target.get("paper_id", ""))),
+        }
+
+    @mcp.tool()
+    async def get_citation_tree(
+        workspace_id: str,
+        paper_id: str,
+    ) -> dict[str, Any]:
+        """
+        Read back the persisted citation tree for a paper, if one exists.
+
+        Returns the same shape as `build_citation_tree` — target, tiers,
+        all_candidates, stats — but loaded from disk in <10ms with no
+        S2 or LLM calls.
+
+        Use this when you want to check whether a tree has already been
+        built (e.g. before kicking off a new `build_citation_tree`).
+        """
+        if (err := enforce(workspace_id, write=False)) is not None:
+            return err
+
+        from loom.citation_tree import load_tree, resolve_target_id
+
+        ws_settings = state.settings.for_workspace(workspace_id)
+        resolved = resolve_target_id(paper_id)
+        tree = load_tree(ws_settings.data_dir, resolved)
+        if tree is None:
+            return {"exists": False, "paper_id": resolved}
+
+        candidates: list[dict[str, Any]] = []
+        if tree.subgraph is not None:
+            for pid, node in tree.subgraph.nodes.items():
+                sig = tree.signals.get(pid)
+                if sig is None:
+                    continue
+                src = ""
+                if node.arxiv_id:
+                    src = f"https://arxiv.org/abs/{node.arxiv_id}"
+                elif node.doi:
+                    src = f"https://doi.org/{node.doi}"
+                elif node.url:
+                    src = node.url
+                candidates.append({
+                    "paper_id": pid,
+                    "title": node.title,
+                    "year": node.year,
+                    "source_url": src,
+                    "score_influence": sig.score_influence,
+                    "convergence_count": sig.convergence_count,
+                    "tier": sig.tier,
+                })
+        candidates.sort(key=lambda c: c["score_influence"], reverse=True)
+
+        return {
+            "exists": True,
+            "target": tree.target,
+            "tiers": tree.tiers,
+            "all_candidates": candidates,
+            "stats": tree.stats,
+            "generated_at": tree.generated_at,
+        }

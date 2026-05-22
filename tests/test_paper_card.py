@@ -430,3 +430,59 @@ def test_ingestion_worker_workspace_aware():
     sig_start = inspect.signature(IngestionWorker.start)
     params_start = list(sig_start.parameters.keys())
     assert "get_workspace_manager_fn" in params_start
+
+
+def test_find_existing_matches_arxiv_id_from_url(tmp_path):
+    """Dedup helper recognises the same paper across URL formats."""
+    from loom.mcp_server.tools.paper_card_tools import _find_existing
+    from loom.storage.paper_registry import PaperRegistry
+
+    reg = PaperRegistry(tmp_path / "paper_registry.json")
+    reg.register_and_queue("2603.13686")
+    reg.save()
+
+    found = _find_existing(reg, "https://arxiv.org/abs/2603.13686")
+    assert found is not None and found.arxiv_id == "2603.13686"
+
+    assert _find_existing(reg, "https://arxiv.org/abs/9999.99999") is None
+
+
+def test_find_existing_matches_doi(tmp_path):
+    from loom.mcp_server.tools.paper_card_tools import _find_existing
+    from loom.storage.paper_registry import PaperRegistry
+
+    reg = PaperRegistry(tmp_path / "paper_registry.json")
+    reg.register_and_queue("10.1234/foo")
+    reg.save()
+
+    found = _find_existing(reg, "https://doi.org/10.1234/foo")
+    assert found is not None and found.doi == "10.1234/foo"
+
+
+def test_existing_response_shape():
+    from loom.mcp_server.tools.paper_card_tools import _existing_response
+    from loom.storage.paper_registry import PaperRecord
+
+    rec = PaperRecord(
+        paper_id="manual:abc", title="T", status="ingested",
+        arxiv_id="2603.13686", ingested_at="2026-05-22T00:00:00",
+    )
+    resp = _existing_response(rec, action="skipped")
+    assert resp["ok"] is True
+    assert resp["action"] == "skipped"
+    assert resp["status"] == "ingested"
+    assert "already in this workspace" in resp["message"]
+
+
+def test_new_workspace_and_citation_tools_register():
+    """The 3 new MCP tools register on the FastMCP server."""
+    import asyncio
+
+    from loom.mcp_server.server import build_mcp
+
+    mcp = build_mcp()
+    tools = asyncio.run(mcp.list_tools())
+    names = {t.name for t in tools}
+    assert "list_workspace_papers" in names
+    assert "build_citation_tree" in names
+    assert "get_citation_tree" in names

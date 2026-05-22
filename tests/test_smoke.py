@@ -19,6 +19,9 @@ EXPECTED_MCP_TOOLS = {
     "submit_paper", "submit_papers",
     "submit_paper_card", "submit_paper_cards",
     "get_paper_card",
+    # Workspace enumeration + citation tree (for the agent's bulk-analyze loop)
+    "list_workspace_papers",
+    "build_citation_tree", "get_citation_tree",
     # Recommender (legacy feed_* names preserved)
     "feed_create", "feed_more", "rate_item", "refit_ranker",
     "list_feed_items", "get_feed_profile",
