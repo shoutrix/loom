@@ -6,10 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from loom.mcp_server.state import MCPState
 from loom.mcp_server.workspace import MCPWorkspaceLoader
-from loom.mcp_server.tools import (
-    paper_card_tools,
-    shared,
-)
+from loom.mcp_server.tools import documents, shared
 
 
 def register_all(
@@ -19,17 +16,20 @@ def register_all(
 ) -> None:
     """Register every MCP tool group on the given FastMCP instance.
 
-    The MCP boundary is intentionally narrow: workspace enumeration,
-    vault read/write, paper submission, and citation-tree generation.
+    Surface after the unification refactor:
+      - read-only browsing: list_workspaces, get_workspace, health
+      - workspace lifecycle: create_workspace, get_workspace_brief,
+        update_workspace_brief, get_workspace_contents
+      - document write side (single ingestion door): submit_document,
+        submit_documents, get_document, get_document_body,
+        list_documents, delete_documents, filter_new_documents
 
-    Deliberately NOT exposed on MCP (the underlying code remains in
-    tree for HTTP/UI use):
-    - research.expand_query / research_search — agents do their own
-      search; loom is a deposit channel, not a search proxy.
-    - chat_tools.chat_query — agents query their own LLM directly;
-      the loom UI uses the /chat HTTP route for in-app chat.
-    - recommender.* (11 tools) — the recommender is loom-internal,
-      runs on its own schedule, doesn't take MCP commands.
+    Deliberately NOT on MCP (the underlying code stays in tree for
+    HTTP/UI use):
+      - research.expand_query / research_search — agents do their own
+        search; loom is a deposit channel, not a search proxy.
+      - chat_tools.chat_query — UI uses /chat HTTP route.
+      - recommender.* — loom-internal, runs on its own schedule.
     """
     shared.register(mcp, state)
-    paper_card_tools.register(mcp, state, loader)
+    documents.register(mcp, state, loader)

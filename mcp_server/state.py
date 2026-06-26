@@ -1,10 +1,10 @@
 """
 Lightweight, read-mostly state access for the MCP server.
 
-The MCP server is a separate process from the FastAPI server. It reads workspace
-metadata, paper registries, and graph snapshots directly from disk. LLM and
-embedder providers are *not* eagerly initialized -- tools that need them
-(later phases) instantiate them on demand.
+The MCP server runs in a separate process from the FastAPI server. It
+reads workspace metadata, document registries, and graph snapshots
+directly from disk. LLM and embedder providers are not eagerly
+initialized — tools that need them instantiate on demand.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from loom.config import Settings, get_settings
-from loom.storage.paper_registry import PaperRegistry, PaperRecord
+from loom.storage.document_registry import DocumentRecord, DocumentRegistry
 
 
 @dataclass
@@ -24,7 +24,7 @@ class WorkspaceInfo:
     display_name: str
     description: str
     created_at: str
-    capabilities: list[str]  # e.g. ['recommender'] if feed.db is present
+    capabilities: list[str]
     stats: dict[str, Any]
     data_dir: Path
     vault_dir: Path
@@ -36,7 +36,7 @@ class MCPState:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    # ----- workspace metadata --------------------------------------------------
+    # ----- workspace metadata ------------------------------------------
 
     def list_workspaces(self) -> list[WorkspaceInfo]:
         out: list[WorkspaceInfo] = []
@@ -84,7 +84,7 @@ class MCPState:
 
         registry = self._open_registry(workspace_id)
         if registry is not None:
-            stats["papers"] = registry.stats()
+            stats["documents"] = registry.stats()
 
         capabilities = list(meta.get("capabilities", []))
         if "recommender" not in capabilities and (ws_data / "feed.db").exists():
@@ -101,20 +101,18 @@ class MCPState:
             vault_dir=self.settings.vault_dir / workspace_id,
         )
 
-    # ----- paper registry ------------------------------------------------------
+    # ----- document registry -------------------------------------------
 
-    def _open_registry(self, workspace_id: str) -> PaperRegistry | None:
-        path = self.settings.data_dir / workspace_id / "paper_registry.json"
-        if not path.exists():
-            return PaperRegistry(path)  # empty registry, still valid
-        return PaperRegistry(path)
+    def _open_registry(self, workspace_id: str) -> DocumentRegistry | None:
+        path = self.settings.data_dir / workspace_id / "document_registry.json"
+        return DocumentRegistry(path)
 
-    def list_papers(
+    def list_documents(
         self,
         workspace_id: str,
         status: str | None = None,
         limit: int | None = None,
-    ) -> list[PaperRecord]:
+    ) -> list[DocumentRecord]:
         reg = self._open_registry(workspace_id)
         if reg is None:
             return []
@@ -126,13 +124,13 @@ class MCPState:
             records = records[:limit]
         return records
 
-    def get_paper(self, workspace_id: str, paper_id: str) -> PaperRecord | None:
+    def get_document(self, workspace_id: str, doc_id: str) -> DocumentRecord | None:
         reg = self._open_registry(workspace_id)
         if reg is None:
             return None
-        return reg.get(paper_id)
+        return reg.get(doc_id)
 
-    # ----- vault / notes -------------------------------------------------------
+    # ----- vault browse ------------------------------------------------
 
     def list_vault_files(self, workspace_id: str) -> list[str]:
         vault = self.settings.vault_dir / workspace_id
@@ -150,52 +148,3 @@ class MCPState:
         if not target.exists() or not target.is_file():
             return None
         return target.read_text(encoding="utf-8", errors="replace")
-
-    def write_vault_note(
-        self,
-        workspace_id: str,
-        title: str,
-        content: str,
-        subfolder: str = "notes",
-    ) -> dict[str, Any]:
-        """Create a markdown note with auto-slugged filename and frontmatter.
-
-        Writes to <vault>/<workspace>/<subfolder>/<yyyymmdd>_<slug>.md.
-        """
-        from loom.storage.vault import VaultManager
-
-        vault = VaultManager(self.settings.vault_dir / workspace_id)
-        vf = vault.create_note(title=title, content=content, subfolder=subfolder)
-        return {
-            "relative_path": vf.relative_path,
-            "title": vf.title,
-            "size_bytes": vf.size_bytes,
-        }
-
-    def write_vault_file(
-        self,
-        workspace_id: str,
-        relative_path: str,
-        content: str,
-    ) -> dict[str, Any] | None:
-        """Write a markdown file at an explicit path within the workspace vault.
-
-        Refuses paths that escape the workspace vault (path-traversal guard).
-        """
-        from loom.storage.vault import VaultManager
-
-        vault_root = self.settings.vault_dir / workspace_id
-        # Path-traversal guard identical in shape to read_vault_file.
-        candidate = (vault_root / relative_path).resolve()
-        try:
-            candidate.relative_to(vault_root.resolve())
-        except ValueError:
-            return None
-
-        vault = VaultManager(vault_root)
-        vf = vault.write_file(relative_path, content)
-        return {
-            "relative_path": vf.relative_path,
-            "title": vf.title,
-            "size_bytes": vf.size_bytes,
-        }

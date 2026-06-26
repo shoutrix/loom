@@ -23,7 +23,7 @@ from loom.graph.store import GraphStore
 from loom.search.semantic import DualSemanticIndex
 from loom.search.keyword import KeywordIndex
 from loom.storage.vault import VaultManager
-from loom.storage.paper_registry import PaperRegistry
+from loom.storage.document_registry import DocumentRegistry
 from loom.storage.embeddings_cache import load_dual_index, save_dual_index
 from loom.chat.engine import ChatEngine
 from loom.ingestion.pipeline import IngestionPipeline
@@ -38,7 +38,7 @@ class WorkspaceData:
     semantic_index: DualSemanticIndex
     keyword_index: KeywordIndex
     vault: VaultManager
-    registry: PaperRegistry
+    registry: DocumentRegistry
 
 
 class MCPWorkspaceLoader:
@@ -85,8 +85,8 @@ class MCPWorkspaceLoader:
 
             vault = VaultManager(ws_settings.vault_dir)
 
-            registry_path = ws_settings.data_dir / "paper_registry.json"
-            registry = PaperRegistry(registry_path)
+            registry_path = ws_settings.data_dir / "document_registry.json"
+            registry = DocumentRegistry(registry_path)
 
             data = WorkspaceData(
                 workspace_id=workspace_id,

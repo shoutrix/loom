@@ -2,347 +2,193 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: #d1d5db #f3f4f6;
-  }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: #f3f4f6; }
-  ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+/* ---------------------------------------------------------------------
+   Loom — grayscale-only design system.
+   No accent colors. Hierarchy comes from typography + spacing + shadow.
+   --------------------------------------------------------------------- */
+
+:root {
+  --bg-canvas:       #f5f5f5;
+  --bg-panel:        #ffffff;
+  --bg-panel-hover:  #fafafa;
+  --bg-pill:         #ececec;
+  --bg-pill-hover:   #e2e2e2;
+  --text-primary:    #1a1a1a;
+  --text-secondary:  #6b6b6b;
+  --text-muted:      #aaaaaa;
+  --border-soft:     rgba(0, 0, 0, 0.06);
+  --shadow-panel:    0 4px 24px rgba(0, 0, 0, 0.06);
+  --shadow-tab:      0 1px 2px rgba(0, 0, 0, 0.08);
+  --radius-panel:    12px;
+  --radius-pill:     10px;
+  --radius-tab:      8px;
+  --radius-row:      6px;
+
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --font-sans:  -apple-system, BlinkMacSystemFont, 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:  ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.prose h1, .prose h2, .prose h3 {
-  color: #1f2937;
-  margin-top: 1em;
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d4 transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #b4b4b4; }
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea { font-family: inherit; }
+
+/* ---------------------------------------------------------------------
+   Document rendering (markdown → HTML by react-markdown).
+   Serif headings, sans body. Generous spacing.
+   --------------------------------------------------------------------- */
+
+.doc-body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+.doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 1.6em;
   margin-bottom: 0.5em;
+  line-height: 1.25;
 }
-.prose p { margin-bottom: 0.75em; line-height: 1.7; }
-.prose code {
-  background: #f0f1f3;
-  padding: 0.15em 0.4em;
+.doc-body h1 { font-size: 28px; margin-top: 0; }
+.doc-body h2 { font-size: 22px; border-bottom: 1px solid var(--border-soft); padding-bottom: 0.3em; }
+.doc-body h3 { font-size: 18px; }
+.doc-body h4 { font-size: 16px; }
+.doc-body p { margin: 0 0 1em 0; }
+.doc-body ul, .doc-body ol { padding-left: 1.5em; margin: 0 0 1em 0; }
+.doc-body li { margin-bottom: 0.25em; }
+.doc-body blockquote {
+  border-left: 2px solid #cfcfcf;
+  padding: 0.1em 0 0.1em 1em;
+  color: var(--text-secondary);
+  margin: 1em 0;
+}
+.doc-body code {
+  background: #f0f0f0;
+  padding: 0.12em 0.4em;
   border-radius: 4px;
-  font-size: 0.9em;
-  color: #1f2937;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
 }
-.prose pre {
-  background: #f8f9fa;
+.doc-body pre {
+  background: #f6f6f6;
+  border: 1px solid var(--border-soft);
   padding: 1em;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow-x: auto;
-  border: 1px solid #e1e4e8;
 }
-.prose table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-.prose th, .prose td {
-  border: 1px solid #e1e4e8;
+.doc-body pre code { background: transparent; padding: 0; }
+.doc-body table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.doc-body th, .doc-body td {
+  border: 1px solid var(--border-soft);
   padding: 0.5em 0.75em;
   text-align: left;
 }
-.prose th { background: #f0f1f3; font-weight: 600; color: #1f2937; }
-.prose ul, .prose ol { padding-left: 1.5em; margin-bottom: 0.75em; }
-.prose li { margin-bottom: 0.25em; }
-.prose blockquote {
-  border-left: 3px solid #2563eb;
-  padding-left: 1em;
-  color: #6b7280;
-  margin: 1em 0;
-}
-.prose strong { color: #1f2937; }
-.prose a { color: #2563eb; text-decoration: none; }
-.prose a:hover { text-decoration: underline; }
+.doc-body th { background: #fafafa; font-weight: 600; }
+.doc-body a { color: var(--text-primary); text-decoration: underline; text-decoration-color: #cfcfcf; }
+.doc-body a:hover { text-decoration-color: var(--text-primary); }
+.doc-body hr { border: none; border-top: 1px solid var(--border-soft); margin: 2em 0; }
 
-/* ---------------------------------------------------------------- */
-/* Wikipedia-style article rendering for PaperViewer.                */
-/* Goal: minimal, clean, serif body; subtle heading borders; narrow  */
-/* readable column; same shape for every paper.                      */
-/* ---------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+   Reusable layout primitives.
+   --------------------------------------------------------------------- */
 
-.wiki-article {
-  font-family: Georgia, "Linux Libertine", "Times New Roman", serif;
-  font-size: 15px;
-  line-height: 1.65;
-  color: #202122;
-  max-width: 740px;
-  margin: 0 auto;
+.panel {
+  background: var(--bg-panel);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
 }
 
-.wiki-article h1,
-.wiki-article h2,
-.wiki-article h3,
-.wiki-article h4 {
-  font-family: "Linux Libertine", Georgia, "Times New Roman", serif;
-  font-weight: 400;
-  color: #000;
-  margin-top: 1.4em;
-  margin-bottom: 0.3em;
-  line-height: 1.25;
+.row-hover {
+  border-radius: var(--radius-row);
+  transition: background 0.12s ease;
+}
+.row-hover:hover {
+  background: var(--bg-panel-hover);
 }
 
-.wiki-article h1 { font-size: 1.85em; border-bottom: 1px solid #a2a9b1; padding-bottom: 0.25em; }
-.wiki-article h2 { font-size: 1.45em; border-bottom: 1px solid #a2a9b1; padding-bottom: 0.20em; }
-.wiki-article h3 { font-size: 1.20em; }
-.wiki-article h4 { font-size: 1.05em; font-weight: 600; }
-
-.wiki-article p {
-  margin: 0.6em 0;
-}
-
-.wiki-article a {
-  color: #0645ad;
-  text-decoration: none;
-}
-.wiki-article a:hover { text-decoration: underline; }
-.wiki-article a:visited { color: #0b0080; }
-
-.wiki-article ul, .wiki-article ol {
-  padding-left: 1.6em;
-  margin: 0.4em 0 0.8em;
-}
-.wiki-article li { margin: 0.2em 0; }
-
-.wiki-article code {
-  font-family: "SF Mono", Consolas, Menlo, monospace;
-  background: #f8f9fa;
-  border: 1px solid #eaecf0;
-  padding: 0.05em 0.35em;
-  border-radius: 2px;
-  font-size: 0.88em;
-}
-
-.wiki-article pre {
-  font-family: "SF Mono", Consolas, Menlo, monospace;
-  background: #f8f9fa;
-  border: 1px solid #eaecf0;
-  border-radius: 2px;
-  padding: 0.8em 1em;
-  overflow-x: auto;
-  font-size: 0.88em;
-  line-height: 1.45;
-}
-
-.wiki-article pre code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font-size: inherit;
-}
-
-.wiki-article table {
-  border-collapse: collapse;
-  margin: 1em 0;
-  font-size: 0.95em;
-}
-.wiki-article th, .wiki-article td {
-  border: 1px solid #a2a9b1;
-  padding: 0.4em 0.7em;
-  text-align: left;
-}
-.wiki-article th { background: #eaecf0; font-weight: 600; }
-
-.wiki-article blockquote {
-  border-left: 3px solid #c8ccd1;
-  padding-left: 1em;
-  color: #54595d;
-  margin: 1em 0;
-  font-style: italic;
-}
-
-.wiki-article hr {
-  border: 0;
-  border-top: 1px solid #a2a9b1;
-  margin: 1.5em 0;
-}
-
-.wiki-article img {
-  max-width: 100%;
-  height: auto;
-}
-
-/* Paper header: title + prominent source link. */
-.wiki-header {
-  max-width: 740px;
-  margin: 0 auto 1em;
-  padding-bottom: 0.6em;
-  border-bottom: 1px solid #a2a9b1;
-}
-.wiki-header .wiki-title {
-  font-family: "Linux Libertine", Georgia, "Times New Roman", serif;
-  font-size: 2.1em;
-  font-weight: 400;
-  color: #000;
-  line-height: 1.18;
-  margin: 0 0 0.35em 0;
-}
-.wiki-header .wiki-source {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 0.88em;
-  color: #54595d;
-}
-.wiki-header .wiki-source a {
-  color: #0645ad;
-  text-decoration: none;
-}
-.wiki-header .wiki-source a:hover { text-decoration: underline; }
-
-/* ---------------------------------------------------------------- */
-/* PaperCard — VoxSpar-inspired structured review (loom-light theme) */
-/* ---------------------------------------------------------------- */
-
-.paper-card-container {
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
-  color: #1f2937;
-  font-size: 14.5px;
-  line-height: 1.65;
-}
-
-.paper-card-header {
-  padding-bottom: 0.6rem;
-  border-bottom: 1px solid #e1e4e8;
-}
-
-.meta-pill {
-  display: inline-block;
-  padding: 0.1rem 0.55rem;
-  background: #f0f1f3;
-  border: 1px solid #e1e4e8;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  color: #6b7280;
-  margin-right: 0.35rem;
-}
-
-.paper-card-tldr {
-  background: #f8fafc;
-  border-left: 3px solid #2563eb;
-  padding: 0.85rem 1.1rem;
-  border-radius: 6px;
-  font-size: 1rem;
-  line-height: 1.55;
-  color: #1f2937;
-}
-
-.paper-card-field {
-  margin: 0.85rem 0;
-}
-
-.paper-card-field-label {
+.label-muted {
+  font-size: 11px;
   font-weight: 600;
-  color: #6a3fb3;
-  font-size: 0.8rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-right: 0.3rem;
+  color: var(--text-muted);
 }
 
-.paper-card-field-body {
-  display: inline;
-}
-
-.paper-card-section {
-  margin: 1.25rem 0 0.5rem;
-}
-
-.paper-card-section-label {
-  font-weight: 600;
-  color: #6a3fb3;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin: 0;
-}
-
-.paper-card-list,
-.paper-card-results,
-.paper-card-related {
-  margin: 0.4rem 0 0;
-  padding-left: 1.3rem;
-  list-style: disc;
-}
-.paper-card-list li,
-.paper-card-results li,
-.paper-card-related li {
-  margin: 0.3rem 0;
-}
-
-.paper-card-results li {
-  font-variant-numeric: tabular-nums;
-}
-
-.related-title { font-weight: 600; color: #1f2937; }
-.related-why { color: #6b7280; }
-
-.dataset-chip {
+/* Pill toggle (right-rail chat/graph). */
+.pill {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 0.45rem 0.75rem;
-  background: #f8fafc;
-  border: 1px solid #e1e4e8;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  line-height: 1.3;
+  background: var(--bg-pill);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  gap: 2px;
+}
+.pill-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-tab);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.pill-tab[data-active='true'] {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-tab);
+}
+.pill-tab:hover:not([data-active='true']) {
+  color: var(--text-primary);
 }
 
-.dataset-name {
-  font-weight: 600;
-  color: #1f2937;
-}
-.dataset-meta {
-  font-size: 0.78rem;
-  color: #6b7280;
-  margin-top: 0.15rem;
-}
-
-/* Strengths/Limitations 2-up grid (VoxSpar's "good-bad" idiom) */
-.gb-block {
-  background: #f8fafc;
+/* Dropdown menu (three-dot per-row actions). */
+.menu {
+  background: var(--bg-panel);
   border-radius: 8px;
-  padding: 0.75rem 1rem;
-  border: 1px solid #e1e4e8;
+  box-shadow: var(--shadow-panel);
+  padding: 4px;
+  min-width: 160px;
 }
-.gb-block.gb-good {
-  border-left: 3px solid #16a34a;
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 7px 10px;
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 13px;
 }
-.gb-block.gb-bad {
-  border-left: 3px solid #dc2626;
-}
-.gb-block h4 {
-  margin: 0 0 0.5rem;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-}
-.gb-block.gb-good h4 { color: #16a34a; }
-.gb-block.gb-bad  h4 { color: #dc2626; }
-.gb-block ul {
-  margin: 0;
-  padding-left: 1.1rem;
-  list-style: disc;
-  font-size: 0.92rem;
-}
-.gb-block li { margin: 0.25rem 0; }
+.menu-item:hover { background: var(--bg-panel-hover); }
+.menu-item[data-danger='true'] { color: #b00020; }
+.menu-item[data-danger='true']:hover { background: #fdebec; }
 
-/* Workspace relevance block — purple-bordered like VoxSpar */
-.paper-card-relevance {
-  margin: 1.5rem 0 0.5rem;
-  padding: 0.75rem 1.1rem;
-  background: linear-gradient(90deg, rgba(106, 63, 179, 0.06), transparent);
-  border-left: 3px solid #6a3fb3;
-  border-radius: 6px;
-}
-.paper-card-relevance h4 {
-  margin: 0 0 0.35rem;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #6a3fb3;
-  font-weight: 600;
-}
-.paper-card-relevance p {
-  margin: 0;
-  color: #1f2937;
-  font-size: 0.95rem;
-  line-height: 1.55;
-}
+/* Tiny utilities */
+.muted { color: var(--text-secondary); }
+.subtle { color: var(--text-muted); }
+.serif { font-family: var(--font-serif); }

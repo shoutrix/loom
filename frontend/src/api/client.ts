@@ -23,132 +23,96 @@ async function patch(path: string, body?: unknown) {
   return res.json()
 }
 
+async function put(path: string, body?: unknown) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  return res.json()
+}
+
 async function del(path: string) {
   const res = await fetch(`${BASE}${path}`, { method: 'DELETE' })
   return res.json()
 }
 
+export type DocType =
+  | 'research_paper'
+  | 'article'
+  | 'note'
+  | 'transcript'
+  | 'spec'
+  | 'memo'
+  | 'book_chapter'
+  | 'documentation'
+
+export interface DocumentDescriptor {
+  doc_id: string
+  doc_type: DocType
+  title: string
+  body_path?: string
+  source_url?: string
+  authors?: string[]
+  published_at?: string
+  references?: { title?: string; url?: string; arxiv_id?: string; doc_id?: string }[]
+  tldr?: string
+  category_path?: string[]
+  metadata_status?: 'pending' | 'deriving' | 'derived' | 'failed'
+  created_at?: string
+  updated_at?: string
+}
+
+export interface SubmitDocumentRequest {
+  body: string
+  doc_type?: DocType
+  title?: string
+  source_url?: string
+  authors?: string[]
+  published_at?: string
+  references?: { title?: string; url?: string; arxiv_id?: string }[]
+  category_path?: string[]
+}
+
 export const api = {
-  searchPapers: (query: string, maxResults = 20) =>
-    post('/papers/search', { query, max_results: maxResults, enable_graph_expansion: true }),
+  // ----- documents ---------------------------------------------------
+  documents: () => get('/documents'),
+  documentsContents: () => get('/documents/contents'),
+  document: (docId: string) => get(`/documents/${encodeURIComponent(docId)}`),
+  documentBody: (docId: string) => get(`/documents/${encodeURIComponent(docId)}/body`),
+  submitDocument: (req: SubmitDocumentRequest) => post('/documents', req),
+  deleteDocument: (docId: string) => del(`/documents/${encodeURIComponent(docId)}`),
+  queueStatus: () => get('/documents/queue/status'),
 
-  startSearch: (query: string, maxResults = 20) =>
-    post('/papers/search/start', { query, max_results: maxResults, enable_graph_expansion: true }),
-
-  searchStatus: (searchId: string) =>
-    get(`/papers/search/${encodeURIComponent(searchId)}/status`),
-
-  searchResult: (searchId: string) =>
-    get(`/papers/search/${encodeURIComponent(searchId)}/result`),
-
-  stopSearch: (searchId: string) =>
-    post(`/papers/search/${encodeURIComponent(searchId)}/stop`),
-
-  readPaper: (identifier: string) =>
-    post('/papers/read', { identifier }),
-
-  paperContent: (paperId: string) =>
-    get(`/papers/${encodeURIComponent(paperId)}/content`),
-
-  queuePapers: (paperIds: string[] = [], identifiers: string[] = []) =>
-    post('/papers/queue', { paper_ids: paperIds, identifiers }),
-
-  queueStatus: () => get('/papers/queue/status'),
-
-  exploreGraph: (paperId: string, title: string, abstract: string) =>
-    post('/papers/explore-graph/start', { paper_id: paperId, title, abstract }),
-
-  exploreGraphStatus: (jobId: string) =>
-    get(`/papers/explore-graph/${encodeURIComponent(jobId)}/status`),
-
-  exploreGraphResult: (jobId: string) =>
-    get(`/papers/explore-graph/${encodeURIComponent(jobId)}/result`),
-
-  // Paper cards (13-field structured review; D1/D2).
-  startPaperCard: (paperId: string) =>
-    post(`/papers/card/build/${encodeURIComponent(paperId)}`),
-
-  paperCardStatus: (jobId: string) =>
-    get(`/papers/card/status/${encodeURIComponent(jobId)}`),
-
-  paperCardCached: (paperId: string) =>
-    get(`/papers/card/cached/${encodeURIComponent(paperId)}`),
-
-  // Citation tree (multi-hop subgraph + tier classification; C6/C7).
-  startCitationTree: (params: {
-    paper_id: string
-    title?: string
-    depth?: number
-    per_hop_cap?: number
-    max_nodes?: number
-    use_llm_tiebreak?: boolean
-  }) => post('/papers/citation-tree/start', params),
-
-  citationTreeStatus: (jobId: string) =>
-    get(`/papers/citation-tree/status/${encodeURIComponent(jobId)}`),
-
-  citationTreeCached: (paperId: string) =>
-    get(`/papers/citation-tree/cached/${encodeURIComponent(paperId)}`),
-
-  registry: () => get('/papers/registry'),
-
-  // Categorization (Wikipedia-style hierarchical view of the workspace)
-  startCategorize: () => post('/papers/categorize'),
-  categorizeStatus: (jobId: string) =>
-    get(`/papers/categorize/status/${encodeURIComponent(jobId)}`),
-  categorization: () => get('/papers/categorization'),
-
-  chat: (message: string) => post('/chat', { message }),
-
-  clearChat: () => post('/chat/clear'),
-
-  graphStats: () => get('/graph/stats'),
-
-  graphEntities: (limit = 500) => get(`/graph/entities?limit=${limit}`),
-
-  graphCommunities: () => get('/graph/communities'),
-
-  graphExport: () => get('/graph/export'),
-
-  vaultFiles: () => get('/vault/files'),
-
-  vaultRead: (path: string) => get(`/vault/read?path=${encodeURIComponent(path)}`),
-
-  vaultWrite: (path: string, content: string) =>
-    post('/vault/write', { path, content }),
-
-  vaultNote: (title: string, content: string) =>
-    post('/vault/note', { title, content }),
-
-  ingestUrl: (url: string) => post('/ingest/url', { url }),
-
-  ingestFile: (file: File) => {
-    const form = new FormData()
-    form.append('file', file)
-    return fetch('/ingest/file', { method: 'POST', body: form }).then(r => r.json())
-  },
-
+  // ----- workspaces --------------------------------------------------
   workspaces: () => get('/workspaces'),
-
   activeWorkspace: () => get('/workspaces/active'),
-
-  renameWorkspace: (name: string) =>
-    patch('/workspaces/active/name', { name }),
-
+  renameWorkspace: (name: string) => patch('/workspaces/active/name', { name }),
   createWorkspace: (workspaceId: string, description = '') =>
     post('/workspaces/create', { workspace_id: workspaceId, description }),
-
   switchWorkspace: (workspaceId: string) =>
     post('/workspaces/switch', { workspace_id: workspaceId }),
+  deleteWorkspace: (workspaceId: string) => del(`/workspaces/${workspaceId}`),
 
-  deleteWorkspace: (workspaceId: string) =>
-    del(`/workspaces/${workspaceId}`),
+  // ----- workspace brief ---------------------------------------------
+  workspaceBrief: () => get('/workspaces/brief'),
+  setWorkspaceBrief: (body: { brief?: any; user_notes?: string }) =>
+    put('/workspaces/brief', body),
+  regenerateWorkspaceBrief: () => post('/workspaces/brief/regenerate'),
 
-  // Recommender (HTTP routes under /feed — kept for path-stability while
-  // package and tool names migrate to "recommender").
+  // ----- chat --------------------------------------------------------
+  chat: (message: string) => post('/chat', { message }),
+  clearChat: () => post('/chat/clear'),
+
+  // ----- graph -------------------------------------------------------
+  graphStats: () => get('/graph/stats'),
+  graphEntities: (limit = 500) => get(`/graph/entities?limit=${limit}`),
+  graphCommunities: () => get('/graph/communities'),
+  graphExport: () => get('/graph/export'),
+
+  // ----- recommender (optional capability) ---------------------------
   recommenderProfile: (workspaceId: string) =>
     get(`/feed/profile/${encodeURIComponent(workspaceId)}`),
-
   recommenderItems: (
     workspaceId: string,
     opts?: { status?: string; limit?: number; runId?: string },
@@ -160,30 +124,13 @@ export const api = {
     const qs = params.toString()
     return get(`/feed/items/${encodeURIComponent(workspaceId)}${qs ? '?' + qs : ''}`)
   },
-
   recommenderRuns: (workspaceId: string, limit = 10) =>
     get(`/feed/runs/${encodeURIComponent(workspaceId)}?limit=${limit}`),
-
   recommenderRate: (workspaceId: string, itemId: string, rating: number, note = '') =>
     post(
       `/feed/items/${encodeURIComponent(workspaceId)}/${encodeURIComponent(itemId)}/rate`,
       { rating, note },
     ),
-
-  // Materialize is currently only exposed via MCP; the UI button is a UX
-  // affordance for the user to copy the right MCP call. Once an HTTP route
-  // is added this method will hit it directly.
-  recommenderMaterialize: (workspaceId: string, itemIds: string[]) => {
-    const cmd = `loom: materialize_into_workspace workspace_id="${workspaceId}" item_ids=${JSON.stringify(itemIds)}`
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(cmd)
-    }
-    return Promise.resolve({
-      ok: true,
-      hint: 'MCP command copied to clipboard. Run it from Claude Code or Cursor to materialize.',
-      command: cmd,
-    })
-  },
 
   health: () => get('/health'),
 }

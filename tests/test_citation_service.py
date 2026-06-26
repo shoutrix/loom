@@ -309,10 +309,12 @@ def test_run_llm_tiebreak_returns_signals_on_json_parse_failure():
 # ----- API endpoints register ------------------------------------------------
 
 
-def test_citation_tree_routes_register():
-    from loom.main import app
-
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/papers/citation-tree/start" in paths
-    assert any(p.startswith("/papers/citation-tree/status/") for p in paths)
-    assert any(p.startswith("/papers/citation-tree/cached/") for p in paths)
+def test_citation_tree_backend_importable():
+    """Citation tree is no longer exposed (no MCP, no HTTP) — it's a
+    backend-only capability the UI may surface later. The module itself
+    must still import so future re-exposure stays cheap.
+    """
+    from loom.citation_tree import build_citation_tree, load_tree, tree_path
+    assert callable(build_citation_tree)
+    assert callable(load_tree)
+    assert callable(tree_path)

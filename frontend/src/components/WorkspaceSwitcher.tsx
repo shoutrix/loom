@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import { ChevronDown, Plus, Check, Trash2 } from 'lucide-react'
 
 interface Workspace {
   workspace_id: string
@@ -10,9 +9,14 @@ interface Workspace {
 
 interface Props {
   currentId: string
-  onSwitch: (id: string, displayName?: string) => void
+  onSwitch: (id: string) => void
 }
 
+/**
+ * Grayscale workspace switcher anchored at the top of the left overlay.
+ * Renders as the workspace name followed by a chevron that opens a
+ * dropdown of every workspace + a "new workspace" row at the bottom.
+ */
 export function WorkspaceSwitcher({ currentId, onSwitch }: Props) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [open, setOpen] = useState(false)
@@ -20,9 +24,7 @@ export function WorkspaceSwitcher({ currentId, onSwitch }: Props) {
   const [newId, setNewId] = useState('')
   const ref = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (open) load()
-  }, [open])
+  useEffect(() => { if (open) load() }, [open])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -33,12 +35,7 @@ export function WorkspaceSwitcher({ currentId, onSwitch }: Props) {
   }, [])
 
   const load = async () => {
-    try {
-      const data = await api.workspaces()
-      setWorkspaces(data || [])
-    } catch {
-      // ignore
-    }
+    try { setWorkspaces((await api.workspaces()) || []) } catch {}
   }
 
   const switchTo = async (id: string) => {
@@ -48,96 +45,102 @@ export function WorkspaceSwitcher({ currentId, onSwitch }: Props) {
       onSwitch(id)
       setOpen(false)
       window.location.reload()
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   const create = async () => {
-    if (!newId.trim()) return
+    const id = newId.trim()
+    if (!id) return
     try {
-      await api.createWorkspace(newId.trim())
-      await switchTo(newId.trim())
-    } catch {
-      // ignore
-    }
+      await api.createWorkspace(id)
+      await switchTo(id)
+    } catch {}
   }
 
-  const deleteWs = async (id: string) => {
+  const remove = async (id: string) => {
     if (id === currentId) return
-    if (!confirm(`Delete workspace "${id}" and all its data? This cannot be undone.`)) return
-    try {
-      await api.deleteWorkspace(id)
-      load()
-    } catch {
-      // ignore
-    }
+    if (!confirm(`Delete workspace "${id}" and all its data?`)) return
+    try { await api.deleteWorkspace(id); load() } catch {}
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(!open)}
-        className="p-1 text-text-muted hover:text-text-secondary transition-colors"
-        title="Switch workspace"
+        style={{
+          width: '100%',
+          background: 'transparent',
+          border: 'none',
+          padding: '8px 10px',
+          borderRadius: 6,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          color: 'var(--text-primary)',
+          fontSize: 14,
+          fontWeight: 600,
+        }}
+        className="row-hover"
       >
-        <ChevronDown size={14} />
+        <span>{currentId}</span>
+        <span className="subtle" style={{ fontSize: 11 }}>▾</span>
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 w-52 bg-white border border-surface-3 rounded-lg shadow-xl z-50 overflow-hidden">
-          <div className="py-1">
-            {workspaces.map(ws => (
-              <div
-                key={ws.workspace_id}
-                className="group flex items-center hover:bg-surface-2 transition-colors"
+        <div
+          className="menu"
+          style={{
+            position: 'absolute', left: 0, top: '100%', marginTop: 4,
+            width: '100%', zIndex: 40,
+          }}
+        >
+          {workspaces.map(ws => (
+            <div
+              key={ws.workspace_id}
+              style={{ display: 'flex', alignItems: 'center' }}
+            >
+              <button
+                onClick={() => switchTo(ws.workspace_id)}
+                className="menu-item"
+                style={{ flex: 1, fontWeight: ws.workspace_id === currentId ? 600 : 400 }}
               >
+                {ws.workspace_id === currentId ? '✓  ' : '    '}{ws.workspace_id}
+              </button>
+              {ws.workspace_id !== currentId && (
                 <button
-                  onClick={() => switchTo(ws.workspace_id)}
-                  className="flex-1 flex items-center gap-2 px-3 py-2 text-sm"
+                  onClick={() => remove(ws.workspace_id)}
+                  className="menu-item"
+                  data-danger="true"
+                  style={{ width: 32, padding: '7px 4px' }}
+                  title="Delete workspace"
                 >
-                  {ws.workspace_id === currentId ? (
-                    <Check size={13} className="text-accent" />
-                  ) : (
-                    <span className="w-[13px]" />
-                  )}
-                  <span className={ws.workspace_id === currentId ? 'text-accent font-medium' : 'text-text-secondary'}>
-                    {ws.workspace_id}
-                  </span>
+                  ×
                 </button>
-                {ws.workspace_id !== currentId && (
-                  <button
-                    onClick={() => deleteWs(ws.workspace_id)}
-                    className="opacity-0 group-hover:opacity-100 px-2 py-1 text-text-muted hover:text-red-500 transition-all"
-                    title="Delete workspace"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="border-t border-surface-3 p-2">
+              )}
+            </div>
+          ))}
+          <div style={{ borderTop: '1px solid var(--border-soft)', marginTop: 4, paddingTop: 4 }}>
             {creating ? (
-              <div className="flex gap-1">
+              <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>
                 <input
-                  className="flex-1 bg-surface-1 border border-surface-3 rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent"
-                  placeholder="workspace-name"
+                  autoFocus
                   value={newId}
                   onChange={e => setNewId(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && create()}
-                  autoFocus
+                  placeholder="workspace-id"
+                  style={{
+                    flex: 1, padding: '5px 8px', fontSize: 13,
+                    border: '1px solid var(--border-soft)', borderRadius: 5,
+                    background: 'var(--bg-canvas)',
+                  }}
                 />
-                <button onClick={create} className="text-xs bg-accent text-white px-2 py-1 rounded">
-                  Create
+                <button onClick={create} className="menu-item" style={{ width: 'auto', padding: '5px 10px', fontWeight: 600 }}>
+                  add
                 </button>
               </div>
             ) : (
-              <button
-                onClick={() => setCreating(true)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-text-muted hover:text-accent transition-colors"
-              >
-                <Plus size={12} /> New workspace
+              <button onClick={() => setCreating(true)} className="menu-item">
+                + New workspace
               </button>
             )}
           </div>

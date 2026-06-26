@@ -286,12 +286,13 @@ def test_subgroups_supported():
     assert sorted(top["subgroups"][0]["paper_ids"]) == ["p2", "p3"]
 
 
-def test_categorize_endpoints_register():
-    """Smoke: P12 backend routes register on the FastAPI app."""
-    from loom.main import app
-
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/papers/categorize" in paths
-    assert "/papers/categorization" in paths
-    # Status route uses a path parameter; check by prefix.
-    assert any(p.startswith("/papers/categorize/status/") for p in paths)
+def test_categorize_module_still_importable():
+    """The categorize/ module is still in the tree even though its HTTP
+    surface was removed in the unification refactor — the metadata
+    worker reuses fit_paper_into_existing for per-document placement.
+    """
+    from loom.categorize.categorizer import (
+        Categorization, PaperInput, generate_categorization, is_stale,
+    )
+    assert generate_categorization is not None
+    assert PaperInput("p1", "T", "abs").paper_id == "p1"

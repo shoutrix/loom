@@ -32,7 +32,9 @@ from loom.search.semantic import DualSemanticIndex
 from loom.search.keyword import KeywordIndex
 from loom.storage.vault import VaultManager
 from loom.storage.neo4j_sync import Neo4jSync
-from loom.storage.paper_registry import PaperRegistry
+from loom.storage.document_registry import DocumentRegistry
+from loom.document import load_document
+from loom.document.metadata_worker import MetadataWorker
 from loom.chat.engine import ChatEngine
 from loom.ingestion.pipeline import IngestionPipeline
 
@@ -48,7 +50,7 @@ class AppState:
     vault: VaultManager
     chat_engine: ChatEngine
     pipeline: IngestionPipeline
-    registry: PaperRegistry = field(default_factory=PaperRegistry)
+    registry: DocumentRegistry = field(default_factory=DocumentRegistry)
     neo4j_sync: Neo4jSync | None = None
     workspace_id: str = "default"
 
@@ -57,26 +59,24 @@ _SCAN_INTERVAL_SECONDS = 60.0
 
 
 class IngestionWorker:
-    """Background thread that processes queued papers across all workspaces.
+    """Background thread that drains the per-workspace document queue.
 
-    Two ingestion paths feed this worker:
-    - In-process enqueue via ``enqueue(workspace_id, paper_id, identifier)``
-      from the HTTP routes inside the same FastAPI process.
+    All documents go through the same path: read the body from the
+    vault (already there because `submit_document` wrote it), chunk +
+    embed + KG-extract. The pre-unification card-vs-document-vs-url
+    branching is gone — there is one shape of work.
+
+    Two ingestion sources feed this worker:
+    - In-process enqueue via ``enqueue(workspace_id, doc_id)`` from the
+      HTTP routes inside the same FastAPI process.
     - Out-of-process submissions from the MCP server (which writes
-      ``status='queued'`` directly to the paper_registry.json of any
-      workspace). The worker discovers these via a periodic registry
-      scan (``_SCAN_INTERVAL_SECONDS``) and on startup.
-
-    Workspace isolation:
-        Each queued item carries its target ``workspace_id``. The worker
-        loads that workspace's pipeline (via the WorkspaceManager) before
-        processing, so submissions to workspace A don't block on
-        workspace B and don't contaminate the active workspace's state.
+      ``status='queued'`` directly to document_registry.json). The
+      worker discovers these via a periodic scan.
     """
 
     def __init__(self) -> None:
-        # (workspace_id, paper_id, identifier)
-        self._queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
+        # (workspace_id, doc_id)
+        self._queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._scan_thread: threading.Thread | None = None
         self._running = False
@@ -84,7 +84,7 @@ class IngestionWorker:
         self._current_title: str | None = None
         self._current_workspace: str | None = None
         # Track ids we've already enqueued from a registry scan so we
-        # don't re-queue the same paper on every scan tick.
+        # don't re-queue the same doc on every scan tick.
         self._enqueued_keys: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
 
@@ -107,11 +107,11 @@ class IngestionWorker:
     def stop(self) -> None:
         self._running = False
 
-    def enqueue(self, workspace_id: str, paper_id: str, identifier: str) -> None:
+    def enqueue(self, workspace_id: str, doc_id: str) -> None:
         """Append one item to the in-memory queue."""
         with self._lock:
-            self._enqueued_keys.add((workspace_id, paper_id))
-        self._queue.put((workspace_id, paper_id, identifier))
+            self._enqueued_keys.add((workspace_id, doc_id))
+        self._queue.put((workspace_id, doc_id))
 
     @property
     def current_paper(self) -> str | None:
@@ -153,7 +153,7 @@ class IngestionWorker:
                 time.sleep(1.0)
 
     def _scan_once(self) -> None:
-        """Walk every workspace directory and enqueue queued papers."""
+        """Walk every workspace's document_registry.json and enqueue queued ids."""
         try:
             mgr = self._get_mgr()
         except Exception:
@@ -167,46 +167,39 @@ class IngestionWorker:
         for ws_dir in sorted(data_root.iterdir()):
             if not ws_dir.is_dir():
                 continue
-            registry_path = ws_dir / "paper_registry.json"
+            registry_path = ws_dir / "document_registry.json"
             if not registry_path.exists():
                 continue
             try:
-                data = json.loads(registry_path.read_text(encoding="utf-8"))
+                records = json.loads(registry_path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            records = data.get("records") if isinstance(data, dict) else data
             if not isinstance(records, list):
                 continue
             ws_id = ws_dir.name
             for rec in records:
-                if not isinstance(rec, dict):
+                if not isinstance(rec, dict) or rec.get("status") != "queued":
                     continue
-                if rec.get("status") != "queued":
+                doc_id = str(rec.get("doc_id", ""))
+                if not doc_id:
                     continue
-                paper_id = str(rec.get("paper_id", ""))
-                identifier = (
-                    rec.get("identifier")
-                    or rec.get("arxiv_id")
-                    or rec.get("doi")
-                    or rec.get("url")
-                    or paper_id
-                )
-                if not paper_id or not identifier:
-                    continue
-                key = (ws_id, paper_id)
+                key = (ws_id, doc_id)
                 with self._lock:
                     if key in self._enqueued_keys:
                         continue
                     self._enqueued_keys.add(key)
-                self._queue.put((ws_id, paper_id, str(identifier)))
-                print(f"  [Worker] picked up queued paper {paper_id} from {ws_id}", flush=True)
+                self._queue.put((ws_id, doc_id))
+                print(f"  [Worker] picked up queued doc {doc_id} from {ws_id}", flush=True)
 
     # ----- consumer loop -----
 
     def _run(self) -> None:
+        from loom.ingestion.parsers import ParsedDocument
+        from loom.document import strip_frontmatter
+
         while self._running:
             try:
-                workspace_id, paper_id, identifier = self._queue.get(timeout=2.0)
+                workspace_id, doc_id = self._queue.get(timeout=2.0)
             except queue.Empty:
                 continue
 
@@ -216,37 +209,69 @@ class IngestionWorker:
             except Exception as e:
                 print(f"  [Worker] could not load workspace {workspace_id}: {e}", flush=True)
                 with self._lock:
-                    self._enqueued_keys.discard((workspace_id, paper_id))
+                    self._enqueued_keys.discard((workspace_id, doc_id))
                 self._queue.task_done()
                 continue
 
-            self._current = paper_id
-            self._current_title = paper_id
+            # Cooperative-cancellation gate.
+            state.registry.refresh_from_disk()
+            if not state.registry.exists(doc_id):
+                print(f"  [Worker] CANCELLED {doc_id} — record gone from registry", flush=True)
+                with self._lock:
+                    self._enqueued_keys.discard((workspace_id, doc_id))
+                self._queue.task_done()
+                continue
+
+            self._current = doc_id
             self._current_workspace = workspace_id
-            state.registry.set_status(paper_id, "ingesting")
+            state.registry.set_status(doc_id, "ingesting")
             state.registry.save()
 
             try:
-                from loom.tools.paper_read import read_and_ingest_paper
-                print(f"  [Worker] Ingesting {identifier} in workspace {workspace_id} ...", flush=True)
-                result = read_and_ingest_paper(state.pipeline, identifier)
+                # Load the Document descriptor — gives us body_path + title.
+                doc = load_document(state.settings.data_dir, doc_id)
+                if doc is None or not doc.body_path:
+                    raise RuntimeError(f"document descriptor missing for {doc_id}")
+                self._current_title = doc.title or doc_id
 
-                if result.error:
-                    state.registry.set_status(
-                        paper_id, "failed", error=result.error,
-                    )
-                    print(f"  [Worker] FAILED {identifier}: {result.error}", flush=True)
+                body = state.vault.read_file(doc.body_path)
+                if not body:
+                    raise RuntimeError(f"body file missing at {doc.body_path}")
+                content = strip_frontmatter(body)
+
+                print(
+                    f"  [Worker] Ingesting {doc_id} ({doc.doc_type}) in {workspace_id} ...",
+                    flush=True,
+                )
+
+                parsed = ParsedDocument(
+                    doc_id=doc_id,
+                    title=doc.title or doc_id,
+                    content=content,
+                    source_type=doc.doc_type,
+                    source_url=doc.source_url,
+                    abstract=doc.tldr or content[:500],
+                )
+                state.pipeline.ingest_document(parsed)
+
+                # Re-check cancellation before flipping to ingested.
+                state.registry.refresh_from_disk()
+                if not state.registry.exists(doc_id):
+                    print(f"  [Worker] CANCELLED {doc_id} mid-ingest — discarding result", flush=True)
                 else:
                     state.registry.set_status(
-                        paper_id, "ingested",
-                        doc_id=result.doc_id,
+                        doc_id, "ingested",
                         ingested_at=datetime.datetime.now().isoformat(),
                     )
-                    print(f"  [Worker] DONE {result.title} ({result.doc_id})", flush=True)
+                    print(f"  [Worker] DONE {doc.title or doc_id}", flush=True)
+                    self._maybe_regenerate_workspace_brief(
+                        state=state, mgr=mgr, workspace_id=workspace_id,
+                    )
 
             except Exception as e:
-                state.registry.set_status(paper_id, "failed", error=str(e))
-                print(f"  [Worker] ERROR {identifier}: {e}", flush=True)
+                if state.registry.exists(doc_id):
+                    state.registry.set_status(doc_id, "failed", error=str(e))
+                print(f"  [Worker] ERROR {doc_id}: {e}", flush=True)
                 traceback.print_exc()
 
             state.registry.save()
@@ -255,12 +280,82 @@ class IngestionWorker:
             self._current_workspace = None
             self._queue.task_done()
 
+    def _maybe_regenerate_workspace_brief(
+        self, *, state, mgr, workspace_id: str,
+    ) -> None:
+        """Auto-regenerate the workspace brief when paper drift hits the threshold.
+
+        Reads ingested documents (any doc_type) from the unified store
+        and feeds title/tldr to the brief generator.
+        """
+        from loom.contents import build_contents
+        from loom.document import list_documents as _list_docs
+        from loom.workspace_brief import (
+            BriefDocument,
+            generate_brief,
+            load_brief,
+            save_brief,
+            should_regenerate,
+        )
+
+        try:
+            stats = state.registry.stats()
+            ingested = stats.get("ingested", 0)
+            cached = load_brief(state.settings.data_dir)
+            if not should_regenerate(cached, ingested):
+                return
+
+            papers: list[dict] = []
+            ingested_ids = {
+                r.doc_id for r in state.registry.get_all() if r.status == "ingested"
+            }
+            for d in _list_docs(state.settings.data_dir):
+                if d.doc_id not in ingested_ids:
+                    continue
+                papers.append({
+                    "paper_id": d.doc_id,
+                    "title": d.title or d.doc_id,
+                    "tldr": d.tldr or "",
+                })
+            contents_tree = build_contents(state.settings.data_dir).to_dict()
+
+            new_brief = generate_brief(
+                mgr.llm, papers=papers, contents_tree=contents_tree,
+            )
+            if not new_brief.goal and not new_brief.scope:
+                if cached is None:
+                    return
+                new_brief = cached.brief
+
+            from datetime import datetime, timezone
+            doc = BriefDocument(
+                version=1,
+                generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                generated_from_paper_count=ingested,
+                model=getattr(mgr.llm, "resolve_model_id", lambda role: "unknown")("pro"),
+                brief=new_brief,
+                user_notes=cached.user_notes if cached else "",
+            )
+            save_brief(state.settings.data_dir, doc)
+            print(
+                f"  [Worker] workspace brief regenerated for {workspace_id} "
+                f"(at {ingested} ingested documents)",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"  [Worker] brief regen failed for {workspace_id}: {e}", flush=True)
+
 
 _ingestion_worker = IngestionWorker()
+_metadata_worker: MetadataWorker | None = None
 
 
 def get_ingestion_worker() -> IngestionWorker:
     return _ingestion_worker
+
+
+def get_metadata_worker() -> MetadataWorker | None:
+    return _metadata_worker
 
 
 def _build_retriever_for_workspace(
@@ -498,8 +593,8 @@ class WorkspaceManager:
             vault=vault,
         )
 
-        registry_path = ws_settings.data_dir / "paper_registry.json"
-        registry = PaperRegistry(registry_path)
+        registry_path = ws_settings.data_dir / "document_registry.json"
+        registry = DocumentRegistry(registry_path)
         print(f"  [Loom] [{workspace_id}] Registry: {registry.stats()}")
 
         neo4j_sync: Neo4jSync | None = None
@@ -580,7 +675,7 @@ def get_app_state() -> AppState:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _manager
+    global _manager, _metadata_worker
     print("  [Loom] Starting up...")
     base_settings = get_settings()
     _manager = WorkspaceManager(base_settings)
@@ -593,21 +688,27 @@ async def lifespan(app: FastAPI):
     print(f"  [Loom] Graph: {active.graph.stats()}")
     print(f"  [Loom] Models: Pro={base_settings.llm.pro_model}, Flash={base_settings.llm.flash_model}")
 
-    # Pass a manager-accessor instead of an active-state-accessor so the
-    # worker can resolve any workspace by id (MCP submissions may target
-    # workspaces that aren't currently active).
     _ingestion_worker.start(lambda: _manager)
 
-    # The worker's periodic scan picks up queued papers from every
-    # workspace's registry, so we don't need to seed the queue with the
-    # active workspace's queued items here — the scan does it.
+    # Metadata worker: derives title / tldr / category_path / refs for
+    # documents whose `metadata_status == "pending"`. Runs alongside
+    # the ingestion worker; both are independent and idempotent.
+    _metadata_worker = MetadataWorker(
+        settings=base_settings,
+        llm_factory=lambda ws_id: make_llm_provider(base_settings, workspace_id=ws_id),
+    )
+    _metadata_worker.start()
+    print("  [Loom] Metadata worker started", flush=True)
+
     queued_active = active.registry.get_queued()
     if queued_active:
-        print(f"  [Loom] {len(queued_active)} queued paper(s) in active workspace — worker scan will pick up these and any in other workspaces")
+        print(f"  [Loom] {len(queued_active)} queued document(s) in active workspace — worker scan will drain these and any in other workspaces")
 
     yield
     if _manager:
         _ingestion_worker.stop()
+        if _metadata_worker is not None:
+            _metadata_worker.stop()
         print("  [Loom] Saving all workspaces...")
         _manager.save_all()
         print("  [Loom] Saved. Shutting down.")
@@ -628,21 +729,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from loom.api.routes_ingest import router as ingest_router
 from loom.api.routes_search import router as search_router
 from loom.api.routes_chat import router as chat_router
 from loom.api.routes_graph import router as graph_router
 from loom.api.routes_vault import router as vault_router
-from loom.api.routes_papers import router as papers_router
+from loom.api.routes_documents import router as documents_router
 from loom.api.routes_workspaces import router as workspaces_router
 from loom.api.routes_feed import router as feed_router
 
-app.include_router(ingest_router)
 app.include_router(search_router)
 app.include_router(chat_router)
 app.include_router(graph_router)
 app.include_router(vault_router)
-app.include_router(papers_router)
+app.include_router(documents_router)
 app.include_router(workspaces_router)
 app.include_router(feed_router)
 
