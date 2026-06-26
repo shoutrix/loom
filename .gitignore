@@ -6,3 +6,8 @@ data/
 *.faiss
 *.npy
 *.meta.json
+.venv/
+.DS_Store
+.pytest_cache/
+node_modules/
+frontend/dist/
